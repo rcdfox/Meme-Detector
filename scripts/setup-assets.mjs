@@ -16,6 +16,10 @@ const models = [
   {
     file: 'pose_landmarker_lite.task',
     url: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'
+  },
+  {
+    file: 'gesture_recognizer.task',
+    url: 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task'
   }
 ];
 

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local-first webcam meme detector using MediaPipe face and pose landmarks.",
+  "description": "Local-first webcam meme detector using MediaPipe face, pose, and hand gesture recognition.",
   "scripts": {
     "setup": "node scripts/setup-assets.mjs",
     "dev": "vite",

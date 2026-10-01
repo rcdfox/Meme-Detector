@@ -2,6 +2,8 @@ import './style.css';
 import {
   FaceLandmarker,
   FilesetResolver,
+  GestureRecognizer,
+  HandLandmarker,
   PoseLandmarker,
   DrawingUtils
 } from '@mediapipe/tasks-vision';
@@ -9,6 +11,7 @@ import {
   MEMES,
   chooseStableMatch,
   extractFaceFeatures,
+  extractHandFeatures,
   extractPoseFeatures,
   rankMemeMatches
 } from './detection.js';
@@ -62,7 +65,7 @@ app.innerHTML = `
           <div id="emptyMatch">
             <div class="big-question">?</div>
             <h2>Show me a meme pose</h2>
-            <p>Try smiling, looking shocked, raising both arms, shrugging, flexing, crossing your arms, or dabbing.</p>
+            <p>Try a deadpan stare, wide eyes, a big smile, a sad face, side-eye, a thumbs-up, a peace sign, pointing, or raising your arms.</p>
           </div>
         </div>
         <div class="match-meta">
@@ -85,15 +88,15 @@ app.innerHTML = `
 
     <section class="library-section">
       <div class="section-title">
-        <div><p class="eyebrow">STARTER LIBRARY</p><h2>Try these detections</h2></div>
-        <p>These starter graphics are original local SVGs, so the repo can be distributed without bundling third-party meme artwork.</p>
+        <div><p class="eyebrow">CAT MEME LIBRARY</p><h2>Try these detections</h2></div>
+        <p>The detector now matches your face, pose, and hand gestures to the supplied silly-cat meme images. More cat and hamster images can be added later without retraining the MediaPipe models.</p>
       </div>
       <div id="memeLibrary" class="meme-library"></div>
     </section>
 
     <footer>
       <span>No account. No uploads. No backend.</span>
-      <span>MediaPipe Face + Pose Landmarker</span>
+      <span>MediaPipe Face + Pose + Gesture Recognition</span>
     </footer>
   </main>
 `;
@@ -126,6 +129,7 @@ els.library.innerHTML = MEMES.map((m) => `
 
 let faceLandmarker = null;
 let poseLandmarker = null;
+let gestureRecognizer = null;
 let stream = null;
 let running = false;
 let animationId = null;
@@ -134,6 +138,9 @@ let stableHistory = [];
 let recentMatches = [];
 let frameTimes = [];
 let lastRenderedMatch = null;
+let lastGestureResult = null;
+let lastGestureInferenceAt = -Infinity;
+const HAND_INFERENCE_INTERVAL_MS = 66;
 
 function setStatus(message, error = false) {
   els.status.textContent = message;
@@ -141,7 +148,7 @@ function setStatus(message, error = false) {
 }
 
 async function loadModels() {
-  if (faceLandmarker && poseLandmarker) return;
+  if (faceLandmarker && poseLandmarker && gestureRecognizer) return;
   setStatus('Loading local MediaPipe models…');
   const vision = await FilesetResolver.forVisionTasks('/wasm');
   const createTasks = (delegate) => Promise.all([
@@ -161,13 +168,21 @@ async function loadModels() {
       minPoseDetectionConfidence: 0.5,
       minPosePresenceConfidence: 0.5,
       minTrackingConfidence: 0.5
+    }),
+    GestureRecognizer.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: '/models/gesture_recognizer.task', delegate },
+      runningMode: 'VIDEO',
+      numHands: 2,
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
     })
   ]);
   try {
-    [faceLandmarker, poseLandmarker] = await createTasks('GPU');
+    [faceLandmarker, poseLandmarker, gestureRecognizer] = await createTasks('GPU');
   } catch (gpuError) {
     console.warn('GPU delegate unavailable; falling back to CPU.', gpuError);
-    [faceLandmarker, poseLandmarker] = await createTasks('CPU');
+    [faceLandmarker, poseLandmarker, gestureRecognizer] = await createTasks('CPU');
   }
   setStatus('Models loaded. Camera ready.');
 }
@@ -186,7 +201,7 @@ async function startCamera() {
     running = true;
     els.placeholder.hidden = true;
     els.stop.disabled = false;
-    setStatus('Detecting face + pose');
+    setStatus('Detecting face + pose + hands');
     animationId = requestAnimationFrame(predictLoop);
   } catch (err) {
     console.error(err);
@@ -226,7 +241,7 @@ function categoriesFromFace(result) {
   return result?.faceBlendshapes?.[0]?.categories ?? [];
 }
 
-function drawLandmarks(faceResult, poseResult) {
+function drawLandmarks(faceResult, poseResult, handResult) {
   const ctx = els.canvas.getContext('2d');
   ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
   const drawing = new DrawingUtils(ctx);
@@ -240,14 +255,20 @@ function drawLandmarks(faceResult, poseResult) {
     drawing.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: '#a7f3d0', lineWidth: 2 });
     drawing.drawLandmarks(pose, { color: '#ecfeff', radius: 2 });
   }
+  for (const hand of handResult?.landmarks ?? []) {
+    drawing.drawConnectors(hand, HandLandmarker.HAND_CONNECTIONS, { color: '#fde68a', lineWidth: 2 });
+    drawing.drawLandmarks(hand, { color: '#fff7ed', radius: 2.5 });
+  }
 }
 
-function updateSignals(face, pose) {
+function updateSignals(face, pose, hand) {
   const values = [
     ['Smile', face.smile], ['Jaw open', face.jawOpen], ['Eyes wide', face.eyeWide],
-    ['Brows up', face.browUp], ['Side eye', face.sideEye], ['Hand near face', pose.handNearFace],
-    ['Both hands up', pose.bothHandsUp], ['Flex', pose.flex], ['Shrug', pose.shrug],
-    ['Dab', pose.dab], ['Arms crossed', pose.armsCrossed]
+    ['Squint', face.squint], ['Brows up', face.browUp], ['Brows down', face.browDown],
+    ['Frown', face.frown], ['Side eye', face.sideEye], ['Mouth press', face.press],
+    ['Thumbs up', hand.thumbUp], ['Pointing', hand.pointingUp], ['Peace / victory', hand.victory],
+    ['Open palm', hand.openPalm], ['Closed fist', hand.closedFist], ['Pinch', hand.pinch],
+    ['Hand near face', pose.handNearFace], ['One hand up', pose.oneHandUp], ['Both hands up', pose.bothHandsUp]
   ];
   els.signals.innerHTML = values.map(([label, value]) => `
     <div class="signal-row">
@@ -301,18 +322,27 @@ async function predictLoop(now) {
     lastVideoTime = els.video.currentTime;
     try {
       const timestamp = performance.now();
-      const [faceResult, poseResult] = await Promise.all([
+      const shouldRunHands = timestamp - lastGestureInferenceAt >= HAND_INFERENCE_INTERVAL_MS;
+      const [faceResult, poseResult, handResult] = await Promise.all([
         faceLandmarker.detectForVideo(els.video, timestamp),
-        poseLandmarker.detectForVideo(els.video, timestamp)
+        poseLandmarker.detectForVideo(els.video, timestamp),
+        shouldRunHands
+          ? gestureRecognizer.recognizeForVideo(els.video, timestamp)
+          : Promise.resolve(lastGestureResult)
       ]);
+      if (shouldRunHands) {
+        lastGestureResult = handResult;
+        lastGestureInferenceAt = timestamp;
+      }
       const face = extractFaceFeatures(categoriesFromFace(faceResult));
       const pose = extractPoseFeatures(poseResult?.landmarks?.[0] ?? []);
-      const ranked = rankMemeMatches(face, pose);
+      const hand = extractHandFeatures(handResult ?? {});
+      const ranked = rankMemeMatches(face, pose, hand);
       const top = ranked[0];
       const stable = chooseStableMatch(stableHistory, top, { minFrames: 3, maxHistory: 5 });
       stableHistory = stable.history;
-      drawLandmarks(faceResult, poseResult);
-      updateSignals(face, pose);
+      drawLandmarks(faceResult, poseResult, handResult);
+      updateSignals(face, pose, hand);
       renderMatch(stable.match, top);
       updateFps(now);
     } catch (err) {
