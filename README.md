@@ -2,33 +2,216 @@
 
 A local-first computer-vision web app that watches a webcam feed, estimates the user's facial expression and body pose, and displays the closest matching meme-style image beside the camera.
 
-The app is designed for a simple **clone -> install -> run** workflow. There is no account system, database, upload endpoint, or application backend. Webcam frames are processed locally in the browser with MediaPipe Face Landmarker and Pose Landmarker.
+The app is designed for a simple **clone → install → run** workflow. There is no account system, database, upload endpoint, or application backend. Webcam frames are processed locally in the browser using MediaPipe Face Landmarker and Pose Landmarker.
 
-> Course/project note: the starter meme artwork in this repository is intentionally original SVG artwork rather than copied third-party meme images. This avoids shipping copyrighted image files and makes the initial repository self-contained. Real meme images can be added later by replacing the SVG assets or adding new entries to the meme library.
-
-## What it detects
-
-The initial rule set combines **face blendshapes** and **body landmarks**. It currently includes:
-
-| Detection | Main signal |
-|---|---|
-| Screaming Cat | open mouth + wide eyes + hands near face |
-| Shocked Cat | open mouth + wide eyes |
-| Grinning Cat | strong smile |
-| Side-Eye Cat | strong sideways eye movement |
-| Thinking Cat | hand near face/chin |
-| Suspicious Cat | raised eyebrows + wide eyes |
-| Absolute Victory | both hands above shoulders |
-| Dab Detected | one hand near face + opposite arm extended |
-| Built Different | double-arm flex pose |
-| It Is What It Is | both bent arms/hands near shoulders |
-| Not Impressed | crossed arms |
-
-The matcher is deliberately easy to extend. Adding a new meme is primarily a matter of adding an image and one scoring rule.
+> **Project note:** The starter meme artwork in this repository is intentionally original SVG artwork rather than copied third-party meme images. This keeps the initial repository self-contained and avoids redistributing copyrighted meme images. Recognizable meme images can be added later if their licenses permit redistribution.
 
 ---
 
-## Architecture
+## What It Detects
+
+The initial rule set combines **face blendshapes** and **body landmarks**.
+
+| Detection | Main Signal |
+|---|---|
+| Screaming Cat | Open mouth + wide eyes + hands near face |
+| Shocked Cat | Open mouth + wide eyes |
+| Grinning Cat | Strong smile |
+| Side-Eye Cat | Strong sideways eye movement |
+| Thinking Cat | Hand near face/chin |
+| Suspicious Cat | Raised eyebrows + wide eyes |
+| Absolute Victory | Both hands above shoulders |
+| Dab Detected | One hand near face + opposite arm extended |
+| Built Different | Double-arm flex pose |
+| It Is What It Is | Both bent arms/hands near shoulders |
+| Not Impressed | Crossed arms |
+
+The matcher is deliberately easy to extend. Adding another meme primarily requires adding an image and defining a scoring rule.
+
+---
+
+# Getting Started
+
+## Prerequisites
+
+Before running Meme Detector, make sure the following are installed:
+
+- **Git**
+- **Node.js 20.19+**, or a newer supported Node.js LTS release
+- **npm**, which is installed automatically with Node.js
+- A modern browser with webcam support
+- A webcam
+
+Chrome or Edge are recommended for the most predictable WebAssembly and WebGL behavior.
+
+### 1. Check Whether You Already Have Node.js
+
+Open a terminal and run:
+
+```bash
+node --version
+npm --version
+```
+
+If both commands return version numbers, Node.js and npm are already installed.
+
+Example:
+
+```text
+v22.x.x
+10.x.x
+```
+
+You can continue to the **Clone the Repository** section.
+
+### 2. Install Node.js If Needed
+
+If either command returns something similar to:
+
+```text
+command not found: node
+```
+
+or:
+
+```text
+command not found: npm
+```
+
+install Node.js.
+
+**You do not need to install npm separately.** npm is included with Node.js.
+
+The easiest cross-platform option is to download a current Node.js LTS release from:
+
+https://nodejs.org/
+
+### macOS with Homebrew
+
+If you already use Homebrew:
+
+```bash
+brew install node
+```
+
+### Windows
+
+Install the current Node.js LTS release from:
+
+https://nodejs.org/
+
+The standard installer includes both Node.js and npm.
+
+### Linux
+
+Node.js can be installed through your distribution's package manager or through the official Node.js installation options.
+
+After installation, close and reopen your terminal if necessary and verify:
+
+```bash
+node --version
+npm --version
+```
+
+---
+
+## Clone the Repository
+
+Clone Meme Detector from GitHub:
+
+```bash
+git clone https://github.com/rcdfox/Meme-Detector.git
+cd Meme-Detector
+```
+
+If you already have the repository downloaded, simply navigate into its folder:
+
+```bash
+cd path/to/Meme-Detector
+```
+
+---
+
+## Install Dependencies
+
+From inside the `Meme-Detector` directory, run:
+
+```bash
+npm install
+```
+
+This installs the JavaScript dependencies defined in `package.json`, including:
+
+- MediaPipe Tasks Vision
+- Vite
+
+You normally only need to run `npm install` once after cloning the repository.
+
+Run it again if:
+
+- `package.json` changes;
+- dependencies are updated; or
+- you delete the `node_modules` directory.
+
+---
+
+## Run the App
+
+Start Meme Detector with:
+
+```bash
+npm start
+```
+
+`npm start` prepares the local MediaPipe assets and starts the Vite development server.
+
+On the first run, setup will:
+
+1. copy MediaPipe's WASM runtime from `node_modules/@mediapipe/tasks-vision/wasm` into `public/wasm`;
+2. download the official Face Landmarker model into `public/models`;
+3. download the official Pose Landmarker Lite model into `public/models`;
+4. start the local development server.
+
+You should see output similar to:
+
+```text
+Local: http://localhost:5173/
+```
+
+Open that address in your browser.
+
+Normally:
+
+```text
+http://localhost:5173
+```
+
+Click **Start Camera** and allow the browser to access your webcam.
+
+> Do not open `index.html` directly from Finder or File Explorer. Run the application through the local Vite server using `npm start`.
+
+---
+
+## Normal Workflow After Initial Setup
+
+After the first installation and setup, starting the application is normally just:
+
+```bash
+cd Meme-Detector
+npm start
+```
+
+The setup script skips model files that are already present.
+
+You can also start Vite without rerunning asset setup:
+
+```bash
+npm run dev
+```
+
+---
+
+# Architecture
 
 ```text
 Webcam
@@ -60,111 +243,38 @@ Face blendshapes       33 body landmarks
       Best meme displayed
 ```
 
-### Why a local browser app?
+## Why a Local Browser App?
 
 This architecture gives the project several useful properties:
 
 - webcam permission is handled by the browser;
-- no server needs to receive or store video frames;
-- the UI is cross-platform on macOS, Windows, and Linux;
-- the MediaPipe models and WASM runtime are copied/downloaded locally during setup;
-- after setup, the application can use local model/WASM files instead of a model CDN;
+- no project server receives or stores video frames;
+- the UI works across macOS, Windows, and Linux;
+- MediaPipe models and the WASM runtime are stored locally after setup;
+- model inference can use local model and WASM files rather than a model CDN;
 - adding visualizations and new meme classes does not require retraining a neural network.
 
-MediaPipe's package documentation states that input processing occurs on-device and that input images/video are not sent to Google servers. It also states that MediaPipe Tasks may send API performance/utilization metrics to Google. This repository itself does not upload, store, or transmit webcam frames.
+MediaPipe's package documentation states that input processing occurs on-device and input images/video are not sent to Google servers. MediaPipe Tasks may still send API performance or utilization metrics.
+
+This repository itself does not upload, save, or transmit webcam frames.
 
 ---
 
-## Prerequisites
-
-Install:
-
-- **Git**
-- **Node.js 20.19+ or a newer supported Node release**
-- a current Chromium-based browser or Firefox with webcam support
-- a webcam
-
-Chrome/Edge are recommended for the most predictable WebAssembly/WebGL behavior.
-
-Check your versions:
-
-```bash
-git --version
-node --version
-npm --version
-```
-
----
-
-## Quick start
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/rcdfox/Meme-Detector.git
-cd Meme-Detector
-```
-
-### 2. Install JavaScript dependencies
-
-```bash
-npm install
-```
-
-### 3. Run the app
-
-```bash
-npm start
-```
-
-`npm start` performs the local asset setup and then starts the Vite development server.
-
-On the first run, setup will:
-
-1. copy MediaPipe's WASM runtime from `node_modules/@mediapipe/tasks-vision/wasm` into `public/wasm`;
-2. download the official Face Landmarker model into `public/models`;
-3. download the official Pose Landmarker Lite model into `public/models`;
-4. start the local web server.
-
-Open the local URL printed in the terminal, normally:
-
-```text
-http://localhost:5173
-```
-
-Press **Start camera** and allow camera access when the browser asks.
-
-### Later runs
-
-The setup script skips model files that are already present, so you can continue using:
-
-```bash
-npm start
-```
-
-Or, after setup has already completed:
-
-```bash
-npm run dev
-```
-
----
-
-## Commands
+# Commands
 
 | Command | Purpose |
 |---|---|
-| `npm install` | Install Vite and MediaPipe Tasks Vision |
-| `npm run setup` | Copy WASM files and download local model files |
-| `npm start` | Run setup, then start the local development server |
-| `npm run dev` | Start Vite without re-running setup |
-| `npm test` | Run unit tests for feature/matching logic |
+| `npm install` | Install Vite, MediaPipe, and other project dependencies |
+| `npm run setup` | Copy WASM files and download local MediaPipe models |
+| `npm start` | Run setup and then start the local development server |
+| `npm run dev` | Start Vite without rerunning setup |
+| `npm test` | Run unit tests for feature and matching logic |
 | `npm run build` | Produce a production build in `dist/` |
 | `npm run preview` | Preview the production build locally |
 
 ---
 
-## Project structure
+# Project Structure
 
 ```text
 Meme-Detector/
@@ -177,7 +287,7 @@ Meme-Detector/
 │   ├── models/                # Downloaded MediaPipe .task models
 │   └── wasm/                  # Local MediaPipe WASM runtime
 ├── scripts/
-│   └── setup-assets.mjs       # One-time/local asset preparation
+│   └── setup-assets.mjs       # Local asset preparation
 ├── src/
 │   ├── detection.js           # Feature extraction + meme scoring rules
 │   ├── main.js                # Webcam, MediaPipe inference, UI updates
@@ -188,25 +298,50 @@ Meme-Detector/
 
 ---
 
-## How detection works
+# How Detection Works
 
-### 1. Face Landmarker
+## 1. Face Landmarker
 
-The face model produces facial landmarks and blendshape scores. The app currently reads signals including:
+The Face Landmarker produces facial landmarks and blendshape scores.
 
-- `mouthSmileLeft` / `mouthSmileRight`
+The application currently reads signals including:
+
+- `mouthSmileLeft`
+- `mouthSmileRight`
 - `jawOpen`
-- `eyeWideLeft` / `eyeWideRight`
-- `eyeBlinkLeft` / `eyeBlinkRight`
+- `eyeWideLeft`
+- `eyeWideRight`
+- `eyeBlinkLeft`
+- `eyeBlinkRight`
 - eyebrow raise blendshapes
 - mouth pucker/frown blendshapes
 - eye look-in/look-out blendshapes
 
-Those values are converted into normalized features such as `smile`, `jawOpen`, `eyeWide`, `browUp`, and `sideEye`.
+These values are converted into normalized features such as:
 
-### 2. Pose Landmarker
+```text
+smile
+jawOpen
+eyeWide
+browUp
+sideEye
+```
 
-The pose model provides 33 normalized body landmarks. The current rules use the nose, shoulders, elbows, wrists, and hips to estimate:
+---
+
+## 2. Pose Landmarker
+
+The Pose Landmarker provides 33 normalized body landmarks.
+
+The current detection rules primarily use:
+
+- nose;
+- shoulders;
+- elbows;
+- wrists;
+- hips.
+
+These landmarks are used to estimate features including:
 
 - hands above shoulders;
 - hand near face;
@@ -218,40 +353,82 @@ The pose model provides 33 normalized body landmarks. The current rules use the 
 - shrug geometry;
 - dab geometry.
 
-### 3. Meme scoring
+---
 
-Each meme has a weighted score. For example, the Shocked Cat rule gives weight to jaw opening and eye widening. The victory rule strongly weights both wrists being above the shoulders.
+## 3. Meme Scoring
 
-The output is **not a trained meme classifier**. It is a deterministic rule layer on top of pretrained face/pose landmark models. This makes the prototype easy to understand, tune, and extend.
+Each meme has a weighted detection score.
 
-### 4. Stabilization
+For example, the **Shocked Cat** rule gives significant weight to:
 
-A meme does not appear because of one noisy frame. The best candidate must repeat across multiple recent frames before it becomes the displayed match. This reduces flicker and accidental detections.
+- jaw opening;
+- eye widening.
+
+The **Absolute Victory** rule strongly weights both wrists being above the shoulders.
+
+The output is **not a trained meme classifier**.
+
+Instead, the application uses a deterministic rule layer on top of pretrained face and pose landmark models.
+
+This makes the prototype:
+
+- easier to understand;
+- easier to debug;
+- easier to tune;
+- easier to extend.
 
 ---
 
-## Adding a new meme
+## 4. Multi-Frame Stabilization
 
-### Step 1: Add an image
+A meme is not displayed because of a single noisy frame.
 
-Place an image in:
+The best candidate must repeatedly score highly across several recent frames before it becomes the displayed match.
+
+This reduces:
+
+- flickering;
+- accidental detections;
+- brief tracking errors;
+- rapid switching between memes.
+
+---
+
+# Adding a New Meme
+
+## Step 1: Add an Image
+
+Place the image inside:
 
 ```text
 public/memes/
 ```
 
-Recommended formats:
+Recommended formats include:
 
 - `.svg`
 - `.png`
 - `.jpg`
 - `.webp`
 
-Use images you created, own, have permission to redistribute, or that have a license compatible with your project.
+Use images that you:
 
-### Step 2: Register it
+- created;
+- own;
+- have permission to redistribute; or
+- can redistribute under an appropriate license.
 
-Open `src/detection.js` and add an item to `MEMES`:
+---
+
+## Step 2: Register the Meme
+
+Open:
+
+```text
+src/detection.js
+```
+
+Add an item to the `MEMES` array:
 
 ```js
 {
@@ -262,9 +439,11 @@ Open `src/detection.js` and add an item to `MEMES`:
 }
 ```
 
-### Step 3: Add a scoring rule
+---
 
-In `rankMemeMatches()`, add a rule:
+## Step 3: Add a Scoring Rule
+
+Inside `rankMemeMatches()`, add a rule such as:
 
 ```js
 [
@@ -275,57 +454,156 @@ In `rankMemeMatches()`, add a rule:
 ]
 ```
 
-The four fields are:
+The fields are:
 
 ```text
-[meme id, score expression, detection threshold, human-readable reason]
+[
+  meme ID,
+  score expression,
+  detection threshold,
+  human-readable reason
+]
 ```
 
-### Step 4: Tune using the diagnostics panel
+---
 
-Run the app and watch the live signal percentages below the camera. Those meters make it easier to choose reasonable weights and thresholds for different people and cameras.
+## Step 4: Tune the Detector
+
+Run:
+
+```bash
+npm start
+```
+
+Use the live diagnostic signal percentages displayed by the application.
+
+These values can help determine whether:
+
+- a feature threshold is too high;
+- a feature threshold is too low;
+- another feature should be included;
+- a rule should receive more or less weight.
 
 ---
 
-## Adding actual meme images later
+# Adding Recognizable Meme Images
 
-The starter SVGs are placeholders by design. To use recognizable meme artwork:
+The starter SVGs are placeholders by design.
+
+To use recognizable meme artwork:
 
 1. confirm that you can legally redistribute the image;
-2. copy it into `public/memes/`;
+2. copy the image into `public/memes/`;
 3. update the matching `asset` path in `src/detection.js`;
-4. optionally add an attribution/license section to this README.
+4. add attribution or licensing information to this README when required.
 
-The detection logic does not depend on the image format or artwork.
+The detection system does not depend on the artwork or image format.
 
 ---
 
-## Privacy and local processing
+# Privacy and Local Processing
 
-### What this repository does
+## What the Repository Does
+
+The application:
 
 - asks the browser for webcam permission;
-- reads frames directly from the `<video>` element;
+- reads frames directly from the browser's `<video>` element;
 - runs MediaPipe inference in the browser;
-- renders landmarks and the selected meme locally;
+- renders landmarks locally;
+- selects and displays memes locally;
 - does **not** define an API server;
 - does **not** define a database;
-- does **not** save webcam images or recordings;
-- does **not** include analytics code of its own.
-
-### Initial setup network access
-
-The first setup needs network access for `npm install` and for downloading the two official MediaPipe model files. After those files are present, model inference uses local files under `public/models` and `public/wasm`.
-
-### MediaPipe telemetry caveat
-
-The official `@mediapipe/tasks-vision` package privacy notice says input data is processed on-device and is not sent to Google servers, but it also says API performance/utilization metrics may be sent to Google. Therefore, this project should be described as **local camera/image processing with no project backend or cloud image storage**, rather than claiming that the browser will never make any outbound network request under any circumstance.
+- does **not** save webcam images;
+- does **not** record webcam video;
+- does **not** include project-specific analytics.
 
 ---
 
-## Troubleshooting
+## Initial Setup Network Access
 
-### `Model files are missing. Run: npm run setup`
+An internet connection is required initially for:
+
+```bash
+npm install
+```
+
+and for downloading the two official MediaPipe model files during setup.
+
+After these files are installed, model inference uses local files from:
+
+```text
+public/models/
+public/wasm/
+```
+
+The application does not require webcam frames to be uploaded to an application backend.
+
+---
+
+## MediaPipe Telemetry Caveat
+
+The official `@mediapipe/tasks-vision` package states that input data is processed on-device and is not sent to Google servers.
+
+MediaPipe Tasks may still send API performance or utilization metrics.
+
+For this reason, this project is best described as:
+
+> **Local camera and image processing with no project backend or cloud image storage.**
+
+It should not be described as guaranteeing that the browser will never make any outbound network request.
+
+---
+
+# Troubleshooting
+
+## `node` or `npm` Command Not Found
+
+If:
+
+```bash
+node --version
+```
+
+or:
+
+```bash
+npm --version
+```
+
+returns a command-not-found error, install Node.js.
+
+npm is included automatically with Node.js.
+
+Download a current Node.js LTS release from:
+
+https://nodejs.org/
+
+On macOS with Homebrew:
+
+```bash
+brew install node
+```
+
+After installing Node.js, close and reopen the terminal if necessary.
+
+Verify:
+
+```bash
+node --version
+npm --version
+```
+
+Then return to the project directory and run:
+
+```bash
+npm install
+npm start
+```
+
+---
+
+## `Model files are missing. Run: npm run setup`
 
 Run:
 
@@ -333,44 +611,86 @@ Run:
 npm run setup
 ```
 
-Then restart:
+Then restart the application:
 
 ```bash
 npm run dev
 ```
 
-### Camera permission denied
+---
 
-In your browser's site settings, allow camera permission for `localhost`, reload the page, and press **Start camera** again.
+## Camera Permission Denied
 
-### No camera found
+Make sure you opened the application through:
 
-Check that another application is not exclusively using the camera and that your OS has granted camera permission to the browser.
+```text
+http://localhost:5173
+```
 
-### Detection is slow
+Then check your browser's site permissions and allow camera access for `localhost`.
+
+Reload the page and click **Start Camera** again.
+
+---
+
+## No Camera Found
+
+Check that:
+
+- the computer has a working webcam;
+- another application is not exclusively using the camera;
+- your operating system has granted camera permission to the browser;
+- the browser has permission to access the webcam.
+
+---
+
+## Detection Is Slow
 
 Try:
 
 - Chrome or Edge;
-- closing other GPU-heavy tabs/apps;
+- closing GPU-heavy browser tabs;
+- closing other applications using significant GPU resources;
 - reducing webcam resolution in `src/main.js`;
-- running only one of the two landmarkers while debugging.
+- temporarily running only one of the two landmarkers while debugging.
 
-The included pose model is the **Lite** version to keep the prototype responsive.
-
-### A pose triggers the wrong meme
-
-Use the signal meters to identify which feature is high, then tune the weights/thresholds in `rankMemeMatches()`.
-
-### A meme flickers on and off
-
-Increase `minFrames` or `maxHistory` in the `chooseStableMatch()` call inside `src/main.js`.
+The included Pose Landmarker uses the **Lite** model to keep the prototype responsive.
 
 ---
 
-## Testing
+## A Pose Triggers the Wrong Meme
 
-The matching logic is separated from the webcam/UI code so it can be unit tested without a camera.
+Use the signal meters in the application to identify which feature is producing a high score.
+
+Then adjust the weights or thresholds inside:
+
+```text
+rankMemeMatches()
+```
+
+in:
+
+```text
+src/detection.js
+```
+
+---
+
+## A Meme Flickers On and Off
+
+Increase `minFrames` or `maxHistory` in the `chooseStableMatch()` call inside:
+
+```text
+src/main.js
+```
+
+This requires the detector to see a matching condition for longer before changing the displayed meme.
+
+---
+
+# Testing
+
+The feature extraction and meme-matching logic are separated from the webcam/UI code so they can be unit tested without requiring a camera.
 
 Run:
 
@@ -378,40 +698,91 @@ Run:
 npm test
 ```
 
-Current tests verify:
+The initial tests verify:
 
 - face blendshape feature extraction;
-- smile -> Grinning Cat matching;
-- hands-up -> Victory matching;
+- smile → Grinning Cat matching;
+- hands-up → Absolute Victory matching;
 - multi-frame stabilization behavior.
 
-For final project testing, also manually validate every pose in different lighting conditions and with multiple users.
+For broader validation, manually test each pose using:
+
+- multiple users;
+- different lighting conditions;
+- different camera positions;
+- different distances from the camera;
+- different backgrounds.
 
 ---
 
-## Possible next upgrades
+# Building for Production
 
-Good next iterations include:
+Create a production build with:
+
+```bash
+npm run build
+```
+
+Vite will generate the production files inside:
+
+```text
+dist/
+```
+
+Preview the production build locally with:
+
+```bash
+npm run preview
+```
+
+---
+
+# Possible Next Upgrades
+
+Possible future improvements include:
 
 - add MediaPipe Hand Landmarker for finger gestures;
-- add more meme classes and licensed image assets;
-- add user-adjustable sensitivity sliders;
-- add a three-second "hold pose" progress ring;
-- add screenshots that are saved **only when the user explicitly clicks Save**;
-- add multi-person detection;
-- collect a small labeled pose dataset and replace some heuristics with a lightweight classifier;
+- add additional meme classes;
+- replace placeholder art with appropriately licensed meme images;
+- add user-adjustable detection sensitivity;
+- add a three-second "hold pose" progress indicator;
+- add an explicit **Save Screenshot** button;
+- support multiple people in one frame;
+- collect a labeled pose dataset;
+- replace selected heuristic rules with a lightweight classifier;
 - export detection events to a local JSON file for testing;
-- package the web app as an Electron/Tauri desktop application.
+- package the application using Electron or Tauri;
+- allow users to create custom meme-to-pose mappings;
+- add a meme library browser;
+- add confidence and threshold configuration through the UI.
 
 ---
 
-## Dependencies
+# Dependencies
 
-- [`@mediapipe/tasks-vision`](https://www.npmjs.com/package/@mediapipe/tasks-vision) — face and pose inference
-- [Vite](https://vite.dev/) — local development/build tooling
+Major dependencies include:
 
-The current package versions are pinned in `package.json` for reproducibility.
+- `@mediapipe/tasks-vision` — face and pose inference
+- `Vite` — local development and build tooling
 
-## License
+Exact dependency versions are pinned in:
 
-Project source code and the original starter SVG artwork are released under the MIT License. See `LICENSE`.
+```text
+package.json
+```
+
+for reproducibility.
+
+---
+
+# License
+
+Project source code and the original starter SVG artwork are released under the MIT License.
+
+See:
+
+```text
+LICENSE
+```
+
+for details.
