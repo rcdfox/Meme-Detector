@@ -3,3 +3,8 @@ dist/
 .DS_Store
 *.log
 .env
+public/models/*
+!public/models/.gitkeep
+
+public/wasm/*
+!public/wasm/.gitkeep
