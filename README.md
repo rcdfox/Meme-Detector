@@ -11,18 +11,18 @@ The app runs in the browser with MediaPipe. There is no account system, database
 | Meme | Main trigger |
 |---|---|
 | Deadpan Cat | Neutral, straight-faced stare |
-| Silly Tongue Cat | Open mouth + smile + wide eyes |
-| Crying Cat | Frown + worried / raised brows |
+| Silly Tongue Cat | Open mouth + shaka/call-me hand posture |
+| Crying Cat | Inner-brow raise + sad mouth shape |
 | Launch Cat | Both hands raised above shoulders |
 | Nerd Cat | Wide eyes + raised brows |
 | Happy Cat | Bright smile + open eyes |
 | Tired Cat | Squint + open mouth / tired expression |
-| Smug Cat | Small smile + squint or sideways glance |
+| Smug Cat | One-sided smirk + squint / sideways glance |
 | Buffering Cat | Very wide eyes + mostly closed mouth |
 | Judging Cat | Side-eye + squint |
-| Thinking Cat | Hand near chin/mouth + pointing or pinch signal |
-| Concerned Cat | Lowered brows + frown |
-| Crying Thumbs-Up Cat | Sad face + recognized thumbs-up |
+| Thinking Cat | Extended index finger held near mouth/chin |
+| Concerned Cat | Furrowed brows + tense/pressed mouth |
+| Crying Thumbs-Up Cat | Sad-face cue + built-in or geometric thumbs-up |
 
 The matching layer is rule-based, which makes it straightforward to add and tune memes.
 
@@ -162,9 +162,12 @@ The Gesture Recognizer detects up to two hands and returns 21 landmarks per hand
 
 The app currently exposes:
 
-- thumbs up
+- thumbs up (with geometric fallback)
 - thumbs down
 - pointing up
+- isolated index-finger detection
+- index-finger proximity to the face
+- shaka / call-me hand posture
 - victory / peace sign
 - open palm
 - closed fist

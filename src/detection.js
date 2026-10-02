@@ -8,18 +8,37 @@ function categoryMap(categories = []) {
 export function extractFaceFeatures(categories = []) {
   const m = categoryMap(categories);
   const score = (name) => clamp01(m.get(name) ?? 0);
+  const smileLeft = score('mouthSmileLeft');
+  const smileRight = score('mouthSmileRight');
+  const squintLeft = score('eyeSquintLeft');
+  const squintRight = score('eyeSquintRight');
+  const frownLeft = score('mouthFrownLeft');
+  const frownRight = score('mouthFrownRight');
+  const lowerDownLeft = score('mouthLowerDownLeft');
+  const lowerDownRight = score('mouthLowerDownRight');
+  const browInnerUp = score('browInnerUp');
+
   return {
     present: categories.length > 0,
-    smile: avg(score('mouthSmileLeft'), score('mouthSmileRight')),
+    smile: avg(smileLeft, smileRight),
+    smileMax: Math.max(smileLeft, smileRight),
+    smileAsymmetry: Math.abs(smileLeft - smileRight),
     jawOpen: score('jawOpen'),
     eyeWide: avg(score('eyeWideLeft'), score('eyeWideRight')),
     blink: avg(score('eyeBlinkLeft'), score('eyeBlinkRight')),
-    squint: avg(score('eyeSquintLeft'), score('eyeSquintRight')),
-    browUp: Math.max(score('browInnerUp'), avg(score('browOuterUpLeft'), score('browOuterUpRight'))),
+    squint: avg(squintLeft, squintRight),
+    squintMax: Math.max(squintLeft, squintRight),
+    squintAsymmetry: Math.abs(squintLeft - squintRight),
+    browInnerUp,
+    browUp: Math.max(browInnerUp, avg(score('browOuterUpLeft'), score('browOuterUpRight'))),
     browDown: avg(score('browDownLeft'), score('browDownRight')),
     pucker: score('mouthPucker'),
     press: avg(score('mouthPressLeft'), score('mouthPressRight')),
-    frown: avg(score('mouthFrownLeft'), score('mouthFrownRight')),
+    frown: avg(frownLeft, frownRight),
+    frownMax: Math.max(frownLeft, frownRight),
+    lowerDown: avg(lowerDownLeft, lowerDownRight),
+    mouthShrugLower: score('mouthShrugLower'),
+    mouthShrugUpper: score('mouthShrugUpper'),
     sideEye: Math.max(
       score('eyeLookOutLeft'), score('eyeLookOutRight'),
       score('eyeLookInLeft'), score('eyeLookInRight')
@@ -28,21 +47,35 @@ export function extractFaceFeatures(categories = []) {
 }
 
 const FACE_NUMERIC_KEYS = [
-  'smile', 'jawOpen', 'eyeWide', 'blink', 'squint',
-  'browUp', 'browDown', 'pucker', 'press', 'frown', 'sideEye'
+  'smile', 'smileMax', 'smileAsymmetry',
+  'jawOpen', 'eyeWide', 'blink',
+  'squint', 'squintMax', 'squintAsymmetry',
+  'browInnerUp', 'browUp', 'browDown',
+  'pucker', 'press', 'frown', 'frownMax',
+  'lowerDown', 'mouthShrugLower', 'mouthShrugUpper',
+  'sideEye'
 ];
 
 const FACE_RESPONSE_CEILINGS = {
   smile: 0.72,
+  smileMax: 0.78,
+  smileAsymmetry: 0.42,
   jawOpen: 0.68,
   eyeWide: 0.46,
   blink: 0.58,
   squint: 0.48,
+  squintMax: 0.58,
+  squintAsymmetry: 0.38,
+  browInnerUp: 0.50,
   browUp: 0.52,
   browDown: 0.50,
   pucker: 0.55,
   press: 0.50,
   frown: 0.48,
+  frownMax: 0.58,
+  lowerDown: 0.52,
+  mouthShrugLower: 0.48,
+  mouthShrugUpper: 0.48,
   sideEye: 0.55
 };
 
@@ -192,22 +225,57 @@ function fingerExtended(landmarks, mcpIndex, pipIndex, tipIndex, ratio = 1.12) {
 }
 
 function handShapeFeatures(landmarks = []) {
-  if (landmarks.length < 21) return { pinch: 0, fingerCount: 0 };
+  if (landmarks.length < 21) {
+    return {
+      pinch: 0, fingerCount: 0, indexOnly: 0, shaka: 0, geometricThumbUp: 0,
+      thumbExtended: false, indexExtended: false, middleExtended: false,
+      ringExtended: false, pinkyExtended: false
+    };
+  }
+
   const palmScale = Math.max(0.035, handDistance(landmarks[5], landmarks[17]));
   const pinch = clamp01(1 - handDistance(landmarks[4], landmarks[8]) / (palmScale * 0.55));
-  const extended = [
-    fingerExtended(landmarks, 1, 3, 4, 1.06),
-    fingerExtended(landmarks, 5, 6, 8),
-    fingerExtended(landmarks, 9, 10, 12),
-    fingerExtended(landmarks, 13, 14, 16),
-    fingerExtended(landmarks, 17, 18, 20)
-  ];
-  return { pinch, fingerCount: extended.filter(Boolean).length };
+  const thumbExtended = fingerExtended(landmarks, 1, 3, 4, 1.03);
+  const indexExtended = fingerExtended(landmarks, 5, 6, 8);
+  const middleExtended = fingerExtended(landmarks, 9, 10, 12);
+  const ringExtended = fingerExtended(landmarks, 13, 14, 16);
+  const pinkyExtended = fingerExtended(landmarks, 17, 18, 20);
+
+  const indexOnly = indexExtended && !middleExtended && !ringExtended && !pinkyExtended ? 1 : 0;
+  const shaka = thumbExtended && pinkyExtended && !indexExtended && !middleExtended && !ringExtended ? 1 : 0;
+  const thumbVertical = landmarks[4].y < landmarks[2].y - palmScale * 0.18 &&
+    landmarks[4].y < landmarks[0].y - palmScale * 0.25;
+  const geometricThumbUp = thumbExtended && !indexExtended && !middleExtended &&
+    !ringExtended && !pinkyExtended && thumbVertical ? 1 : 0;
+
+  return {
+    pinch,
+    fingerCount: [thumbExtended, indexExtended, middleExtended, ringExtended, pinkyExtended].filter(Boolean).length,
+    indexOnly,
+    shaka,
+    geometricThumbUp,
+    thumbExtended,
+    indexExtended,
+    middleExtended,
+    ringExtended,
+    pinkyExtended
+  };
 }
 
-export function extractHandFeatures(result = {}) {
+function faceReference(faceLandmarks = []) {
+  const valid = faceLandmarks.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (valid.length < 4) return null;
+  const xs = valid.map((point) => point.x);
+  const faceWidth = Math.max(0.06, Math.max(...xs) - Math.min(...xs));
+  const anchors = [faceLandmarks[1], faceLandmarks[13], faceLandmarks[14], faceLandmarks[152]]
+    .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  return { faceWidth, anchors };
+}
+
+export function extractHandFeatures(result = {}, faceLandmarks = []) {
   const hands = result.landmarks ?? [];
   const shapes = hands.map(handShapeFeatures);
+  const face = faceReference(faceLandmarks);
   let bestGesture = { name: 'None', score: 0 };
   for (const handGestures of result.gestures ?? []) {
     const top = handGestures?.[0];
@@ -216,13 +284,33 @@ export function extractHandFeatures(result = {}) {
     }
   }
 
+  let indexNearFace = 0;
+  if (face) {
+    for (const landmarks of hands) {
+      const indexTip = landmarks?.[8];
+      if (!indexTip) continue;
+      const nearest = Math.min(...face.anchors.map((anchor) => handDistance(indexTip, anchor)));
+      indexNearFace = Math.max(indexNearFace, clamp01(1 - nearest / (face.faceWidth * 0.72)));
+    }
+  }
+
+  const builtInThumbUp = gestureScore(result, 'Thumb_Up');
+  const geometricThumbUp = Math.max(0, ...shapes.map((shape) => shape.geometricThumbUp));
+  const indexOnly = Math.max(0, ...shapes.map((shape) => shape.indexOnly));
+  const shaka = Math.max(0, ...shapes.map((shape) => shape.shaka));
+
   return {
     present: hands.length > 0,
     handCount: hands.length,
     twoHands: hands.length >= 2 ? 1 : 0,
-    thumbUp: gestureScore(result, 'Thumb_Up'),
+    thumbUp: Math.max(builtInThumbUp, geometricThumbUp * 0.88),
+    builtInThumbUp,
+    geometricThumbUp,
     thumbDown: gestureScore(result, 'Thumb_Down'),
     pointingUp: gestureScore(result, 'Pointing_Up'),
+    indexOnly,
+    indexNearFace,
+    shaka,
     victory: gestureScore(result, 'Victory'),
     openPalm: gestureScore(result, 'Open_Palm'),
     closedFist: gestureScore(result, 'Closed_Fist'),
@@ -237,17 +325,17 @@ export function extractHandFeatures(result = {}) {
 
 export const MEMES = [
   { id: 'deadpan-cat', title: 'Deadpan Cat', asset: '/memes/deadpan-cat.webp', hint: 'Hold a neutral, straight-faced stare at the camera.' },
-  { id: 'silly-tongue-cat', title: 'Silly Tongue Cat', asset: '/memes/silly-tongue-cat.webp', hint: 'Open your mouth while smiling or looking excited.' },
-  { id: 'crying-cat', title: 'Crying Cat', asset: '/memes/crying-cat.webp', hint: 'Make an exaggerated sad or worried face.' },
+  { id: 'silly-tongue-cat', title: 'Silly Tongue Cat', asset: '/memes/silly-tongue-cat.webp', hint: 'Open your mouth and make a shaka/call-me hand pose near the camera.' },
+  { id: 'crying-cat', title: 'Crying Cat', asset: '/memes/crying-cat.webp', hint: 'Raise the inner brows and make an exaggerated sad mouth.' },
   { id: 'launch-cat', title: 'Launch Cat', asset: '/memes/launch-cat.webp', hint: 'Throw both hands up above your shoulders.' },
   { id: 'nerd-cat', title: 'Nerd Cat', asset: '/memes/nerd-cat.webp', hint: 'Raise your eyebrows and open your eyes wide.' },
   { id: 'happy-cat', title: 'Happy Cat', asset: '/memes/happy-cat.webp', hint: 'Give the camera a bright smile with open eyes.' },
   { id: 'tired-cat', title: 'Tired Cat', asset: '/memes/tired-cat.webp', hint: 'Squint while opening your mouth or making a tired face.' },
-  { id: 'smug-cat', title: 'Smug Cat', asset: '/memes/smug-cat.webp', hint: 'Give a small smile with a slight squint or sideways glance.' },
+  { id: 'smug-cat', title: 'Smug Cat', asset: '/memes/smug-cat.webp', hint: 'Make a one-sided smirk with a squint or sideways glance.' },
   { id: 'buffering-cat', title: 'Buffering Cat', asset: '/memes/buffering-cat.webp', hint: 'Freeze with very wide eyes and a mostly closed mouth.' },
   { id: 'judging-cat', title: 'Judging Cat', asset: '/memes/judging-cat.webp', hint: 'Look sharply sideways and squint.' },
-  { id: 'thinking-cat', title: 'Thinking Cat', asset: '/memes/thinking-cat.webp', hint: 'Bring one hand near your chin or mouth; pointing with your index finger helps.' },
-  { id: 'concerned-cat', title: 'Concerned Cat', asset: '/memes/concerned-cat.webp', hint: 'Frown, lower your brows, or make an unimpressed face.' },
+  { id: 'thinking-cat', title: 'Thinking Cat', asset: '/memes/thinking-cat.webp', hint: 'Hold one index finger near your mouth or chin in a thinking pose.' },
+  { id: 'concerned-cat', title: 'Concerned Cat', asset: '/memes/concerned-cat.webp', hint: 'Furrow your brows and press/frown your mouth without opening it.' },
   { id: 'crying-thumbs-up-cat', title: 'Crying Thumbs-Up Cat', asset: '/memes/crying-thumbs-up-cat.webp', hint: 'Make a sad face and give the camera a thumbs-up.' }
 ];
 
@@ -257,15 +345,24 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
   const f = {
     present: face.present ?? false,
     smile: clamp01(face.smile ?? 0),
+    smileMax: clamp01(face.smileMax ?? face.smile ?? 0),
+    smileAsymmetry: clamp01(face.smileAsymmetry ?? 0),
     jawOpen: clamp01(face.jawOpen ?? 0),
     eyeWide: clamp01(face.eyeWide ?? 0),
     blink: clamp01(face.blink ?? 0),
     squint: clamp01(face.squint ?? 0),
+    squintMax: clamp01(face.squintMax ?? face.squint ?? 0),
+    squintAsymmetry: clamp01(face.squintAsymmetry ?? 0),
+    browInnerUp: clamp01(face.browInnerUp ?? face.browUp ?? 0),
     browUp: clamp01(face.browUp ?? 0),
     browDown: clamp01(face.browDown ?? 0),
     pucker: clamp01(face.pucker ?? 0),
     press: clamp01(face.press ?? 0),
     frown: clamp01(face.frown ?? 0),
+    frownMax: clamp01(face.frownMax ?? face.frown ?? 0),
+    lowerDown: clamp01(face.lowerDown ?? 0),
+    mouthShrugLower: clamp01(face.mouthShrugLower ?? 0),
+    mouthShrugUpper: clamp01(face.mouthShrugUpper ?? 0),
     sideEye: clamp01(face.sideEye ?? 0)
   };
   const p = {
@@ -280,8 +377,13 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
   };
   const h = {
     thumbUp: clamp01(hand.thumbUp ?? 0),
+    builtInThumbUp: clamp01(hand.builtInThumbUp ?? hand.thumbUp ?? 0),
+    geometricThumbUp: clamp01(hand.geometricThumbUp ?? 0),
     thumbDown: clamp01(hand.thumbDown ?? 0),
     pointingUp: clamp01(hand.pointingUp ?? 0),
+    indexOnly: clamp01(hand.indexOnly ?? 0),
+    indexNearFace: clamp01(hand.indexNearFace ?? 0),
+    shaka: clamp01(hand.shaka ?? 0),
     victory: clamp01(hand.victory ?? 0),
     openPalm: clamp01(hand.openPalm ?? 0),
     closedFist: clamp01(hand.closedFist ?? 0),
@@ -293,17 +395,22 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
   const low = (value, ceiling) => clamp01((ceiling - value) / Math.max(ceiling, 0.001));
   const evidence = (...values) => Math.max(...values.map(clamp01));
   const faceActivity = evidence(
-    f.smile, f.jawOpen, f.eyeWide, f.squint, f.browUp,
-    f.browDown, f.pucker, f.frown, f.sideEye
+    f.smile, f.smileMax, f.smileAsymmetry,
+    f.jawOpen, f.eyeWide, f.squint, f.squintMax, f.squintAsymmetry,
+    f.browInnerUp, f.browUp, f.browDown,
+    f.pucker, f.press, f.frown, f.frownMax, f.lowerDown,
+    f.mouthShrugLower, f.mouthShrugUpper, f.sideEye
   );
 
   const rules = [
     {
       id: 'crying-thumbs-up-cat',
-      required: h.thumbUp >= 0.56 && evidence(f.frown, f.browUp) >= 0.26,
-      score: 0.62 * h.thumbUp + 0.20 * f.frown + 0.12 * f.browUp + 0.06 * p.oneHandUp,
-      threshold: 0.55,
-      reason: 'recognized thumbs-up + sad / worried face'
+      required: h.thumbUp >= 0.46 &&
+        evidence(f.frownMax, f.browInnerUp, f.lowerDown, f.mouthShrugLower) >= 0.16,
+      score: 0.66 * h.thumbUp + 0.10 * f.frownMax + 0.10 * f.browInnerUp +
+        0.08 * f.lowerDown + 0.06 * p.oneHandUp,
+      threshold: 0.50,
+      reason: 'thumbs-up + visible sad-face cue'
     },
     {
       id: 'launch-cat',
@@ -314,19 +421,21 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'thinking-cat',
-      required: p.handNearFace >= 0.56 &&
-        evidence(h.pointingUp, h.pinch, f.pucker, f.sideEye) >= 0.22,
-      score: 0.48 * p.handNearFace + 0.24 * h.pointingUp + 0.12 * h.pinch +
-        0.08 * f.pucker + 0.08 * f.sideEye,
-      threshold: 0.52,
-      reason: 'hand near face + pointing / pinch / thoughtful cue'
+      required: evidence(p.handNearFace, h.indexNearFace) >= 0.46 &&
+        evidence(h.indexOnly, h.pointingUp) >= 0.46,
+      score: 0.34 * h.indexNearFace + 0.26 * h.indexOnly + 0.18 * h.pointingUp +
+        0.12 * p.handNearFace + 0.06 * f.pucker + 0.04 * f.sideEye,
+      threshold: 0.48,
+      reason: 'extended index finger held near mouth / chin'
     },
     {
       id: 'silly-tongue-cat',
-      required: f.present && f.jawOpen >= 0.42 && evidence(f.smile, f.eyeWide) >= 0.28,
-      score: 0.52 * f.jawOpen + 0.30 * f.smile + 0.18 * f.eyeWide,
-      threshold: 0.54,
-      reason: 'open mouth + playful smile / wide eyes'
+      required: f.present && f.jawOpen >= 0.34 &&
+        evidence(h.shaka, h.iLoveYou, h.openPalm * 0.55) >= 0.24,
+      score: 0.40 * f.jawOpen + 0.12 * f.smileMax + 0.08 * f.eyeWide +
+        0.30 * h.shaka + 0.06 * h.iLoveYou + 0.04 * h.openPalm,
+      threshold: 0.46,
+      reason: 'open mouth + shaka / playful hand pose'
     },
     {
       id: 'judging-cat',
@@ -345,18 +454,22 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'concerned-cat',
-      required: f.present && f.browDown >= 0.34 && f.frown >= 0.20 && f.smile < 0.25,
-      score: 0.46 * f.browDown + 0.34 * f.frown + 0.12 * f.squint + 0.08 * f.press,
-      threshold: 0.50,
-      reason: 'lowered brows + frown'
+      required: f.present && f.jawOpen < 0.26 && f.smileMax < 0.30 &&
+        f.browDown >= 0.24 && evidence(f.press, f.frownMax, f.squintMax) >= 0.16,
+      score: 0.42 * f.browDown + 0.22 * f.press + 0.18 * f.frownMax +
+        0.10 * f.squintMax + 0.08 * low(f.jawOpen, 0.30),
+      threshold: 0.44,
+      reason: 'furrowed brows + tense closed mouth'
     },
     {
       id: 'crying-cat',
-      required: f.present && f.frown >= 0.30 &&
-        evidence(f.browUp, f.press) >= 0.18 && f.smile < 0.22,
-      score: 0.52 * f.frown + 0.28 * f.browUp + 0.12 * f.press + 0.08 * low(f.smile, 0.35),
-      threshold: 0.50,
-      reason: 'frown + worried brows'
+      required: f.present && f.smileMax < 0.28 &&
+        f.browInnerUp >= 0.20 &&
+        evidence(f.frownMax, f.lowerDown, f.mouthShrugLower, f.press) >= 0.18,
+      score: 0.30 * f.browInnerUp + 0.26 * f.frownMax + 0.18 * f.lowerDown +
+        0.12 * f.mouthShrugLower + 0.08 * f.press + 0.06 * low(f.smileMax, 0.35),
+      threshold: 0.43,
+      reason: 'inner brows raised + sad mouth shape'
     },
     {
       id: 'buffering-cat',
@@ -374,11 +487,13 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'smug-cat',
-      required: f.present && f.smile >= 0.22 && f.smile < 0.70 &&
-        evidence(f.squint, f.sideEye) >= 0.24 && f.jawOpen < 0.30,
-      score: 0.46 * f.smile + 0.30 * f.squint + 0.24 * f.sideEye,
-      threshold: 0.48,
-      reason: 'small smile + squint / sideways glance'
+      required: f.present && f.jawOpen < 0.28 &&
+        f.smileMax >= 0.22 &&
+        evidence(f.smileAsymmetry, f.squintAsymmetry, f.sideEye) >= 0.16,
+      score: 0.30 * f.smileMax + 0.28 * f.smileAsymmetry + 0.18 * f.squintMax +
+        0.12 * f.squintAsymmetry + 0.12 * f.sideEye,
+      threshold: 0.42,
+      reason: 'one-sided smirk + squint / sideways glance'
     },
     {
       id: 'happy-cat',

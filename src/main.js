@@ -315,7 +315,8 @@ function updateSignals(face, pose, hand) {
     ['Smile', face.smile], ['Jaw open', face.jawOpen], ['Eyes wide', face.eyeWide],
     ['Squint', face.squint], ['Brows up', face.browUp], ['Brows down', face.browDown],
     ['Frown', face.frown], ['Side eye', face.sideEye], ['Mouth press', face.press],
-    ['Thumbs up', hand.thumbUp], ['Pointing', hand.pointingUp], ['Peace / victory', hand.victory],
+    ['Thumbs up', hand.thumbUp], ['Index finger', hand.indexOnly], ['Finger near face', hand.indexNearFace],
+    ['Shaka / call me', hand.shaka], ['Pointing', hand.pointingUp], ['Peace / victory', hand.victory],
     ['Open palm', hand.openPalm], ['Closed fist', hand.closedFist], ['Pinch', hand.pinch],
     ['Hand near face', pose.handNearFace], ['One hand up', pose.oneHandUp], ['Both hands up', pose.bothHandsUp]
   ];
@@ -404,7 +405,7 @@ async function predictLoop(now) {
       const faceLandmarks = faceResult?.faceLandmarks?.[0] ?? null;
       const rawFace = extractFaceFeatures(categoriesFromFace(faceResult));
       const rawPose = extractPoseFeatures(poseResult?.landmarks?.[0] ?? []);
-      const rawHand = extractHandFeatures(handResult ?? {});
+      const rawHand = extractHandFeatures(handResult ?? {}, faceLandmarks ?? []);
 
       if (!calibrationComplete) {
         if (rawFace.present) calibrationSamples.push(rawFace);

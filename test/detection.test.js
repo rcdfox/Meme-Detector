@@ -27,8 +27,12 @@ test('wide-eyed closed-mouth expression matches buffering cat', () => {
   assert.equal(ranked[0].matched, true);
 });
 
-test('hand near face ranks thinking cat as a match', () => {
-  const ranked = rankMemeMatches({ present: true, pucker: 0.35 }, { handNearFace: 1 });
+test('index finger near face ranks thinking cat as a match', () => {
+  const ranked = rankMemeMatches(
+    { present: true, pucker: 0.20 },
+    { handNearFace: 1 },
+    { indexOnly: 0.92, indexNearFace: 0.88 }
+  );
   assert.equal(ranked[0].id, 'thinking-cat');
   assert.equal(ranked[0].matched, true);
 });
@@ -136,4 +140,151 @@ test('happy cat requires a clear smile rather than weak background expression', 
   const strong = rankMemeMatches({ present: true, smile: 0.82 }, {});
   const happyStrong = strong.find((candidate) => candidate.id === 'happy-cat');
   assert.equal(happyStrong.matched, true);
+});
+
+
+test('thinking cat does not trigger from hand-near-face without an index-finger cue', () => {
+  const ranked = rankMemeMatches(
+    { present: true, pucker: 0.3 },
+    { handNearFace: 1 },
+    { openPalm: 0.8 }
+  );
+  const thinking = ranked.find((candidate) => candidate.id === 'thinking-cat');
+  assert.equal(thinking.matched, false);
+});
+
+test('silly tongue cat requires an open mouth plus playful hand posture', () => {
+  const noHand = rankMemeMatches(
+    { present: true, jawOpen: 0.82, smileMax: 0.55, eyeWide: 0.35 },
+    {},
+    {}
+  ).find((candidate) => candidate.id === 'silly-tongue-cat');
+  assert.equal(noHand.matched, false);
+
+  const shaka = rankMemeMatches(
+    { present: true, jawOpen: 0.82, smileMax: 0.55, eyeWide: 0.35 },
+    {},
+    { shaka: 1 }
+  ).find((candidate) => candidate.id === 'silly-tongue-cat');
+  assert.equal(shaka.matched, true);
+});
+
+test('crying cat responds to inner-brow raise plus sad mouth', () => {
+  const ranked = rankMemeMatches({
+    present: true,
+    browInnerUp: 0.78,
+    frownMax: 0.65,
+    lowerDown: 0.50,
+    mouthShrugLower: 0.35,
+    smileMax: 0.03
+  }, {}, {});
+  assert.equal(ranked[0].id, 'crying-cat');
+  assert.equal(ranked[0].matched, true);
+});
+
+test('concerned cat responds to furrowed brows and tense closed mouth', () => {
+  const ranked = rankMemeMatches({
+    present: true,
+    browDown: 0.72,
+    press: 0.55,
+    frownMax: 0.30,
+    squintMax: 0.22,
+    jawOpen: 0.04,
+    smileMax: 0.03,
+    browInnerUp: 0.05
+  }, {}, {});
+  assert.equal(ranked[0].id, 'concerned-cat');
+  assert.equal(ranked[0].matched, true);
+});
+
+test('smug cat recognizes an asymmetric smirk', () => {
+  const ranked = rankMemeMatches({
+    present: true,
+    smileMax: 0.66,
+    smile: 0.38,
+    smileAsymmetry: 0.58,
+    squintMax: 0.42,
+    squintAsymmetry: 0.24,
+    sideEye: 0.20,
+    jawOpen: 0.03
+  }, {}, {});
+  assert.equal(ranked[0].id, 'smug-cat');
+  assert.equal(ranked[0].matched, true);
+});
+
+test('crying thumbs-up cat accepts strong thumbs-up plus a modest sad cue', () => {
+  const ranked = rankMemeMatches(
+    { present: true, browInnerUp: 0.35, frownMax: 0.22, lowerDown: 0.18 },
+    { oneHandUp: 1 },
+    { thumbUp: 0.88 }
+  );
+  assert.equal(ranked[0].id, 'crying-thumbs-up-cat');
+  assert.equal(ranked[0].matched, true);
+});
+
+
+function syntheticHandBase() {
+  return Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.78 }));
+}
+
+function syntheticFaceLandmarks() {
+  const face = Array.from({ length: 468 }, () => ({ x: 0.5, y: 0.5 }));
+  face[1] = { x: 0.5, y: 0.45 };
+  face[13] = { x: 0.5, y: 0.53 };
+  face[14] = { x: 0.5, y: 0.55 };
+  face[152] = { x: 0.5, y: 0.68 };
+  face[10] = { x: 0.4, y: 0.30 };
+  face[338] = { x: 0.6, y: 0.30 };
+  return face;
+}
+
+test('hand geometry detects an isolated index finger near the face', () => {
+  const hand = syntheticHandBase();
+  hand[0] = { x: 0.5, y: 0.82 };
+  hand[5] = { x: 0.5, y: 0.66 };
+  hand[6] = { x: 0.5, y: 0.56 };
+  hand[8] = { x: 0.5, y: 0.40 };
+  hand[9] = { x: 0.54, y: 0.67 };
+  hand[10] = { x: 0.54, y: 0.72 };
+  hand[12] = { x: 0.54, y: 0.77 };
+  hand[13] = { x: 0.58, y: 0.68 };
+  hand[14] = { x: 0.58, y: 0.73 };
+  hand[16] = { x: 0.58, y: 0.78 };
+  hand[17] = { x: 0.62, y: 0.69 };
+  hand[18] = { x: 0.62, y: 0.74 };
+  hand[20] = { x: 0.62, y: 0.79 };
+  hand[1] = { x: 0.44, y: 0.70 };
+  hand[3] = { x: 0.45, y: 0.74 };
+  hand[4] = { x: 0.46, y: 0.78 };
+
+  const features = extractHandFeatures(
+    { landmarks: [hand], gestures: [[]] },
+    syntheticFaceLandmarks()
+  );
+  assert.equal(features.indexOnly, 1);
+  assert.ok(features.indexNearFace > 0.55);
+});
+
+test('hand geometry detects a shaka/call-me pose', () => {
+  const hand = syntheticHandBase();
+  hand[0] = { x: 0.5, y: 0.82 };
+  hand[1] = { x: 0.43, y: 0.70 };
+  hand[3] = { x: 0.36, y: 0.62 };
+  hand[4] = { x: 0.25, y: 0.52 };
+  hand[5] = { x: 0.47, y: 0.68 };
+  hand[6] = { x: 0.48, y: 0.73 };
+  hand[8] = { x: 0.49, y: 0.78 };
+  hand[9] = { x: 0.52, y: 0.68 };
+  hand[10] = { x: 0.52, y: 0.73 };
+  hand[12] = { x: 0.52, y: 0.78 };
+  hand[13] = { x: 0.57, y: 0.68 };
+  hand[14] = { x: 0.57, y: 0.73 };
+  hand[16] = { x: 0.57, y: 0.78 };
+  hand[17] = { x: 0.62, y: 0.68 };
+  hand[18] = { x: 0.66, y: 0.57 };
+  hand[20] = { x: 0.75, y: 0.40 };
+
+  const features = extractHandFeatures({ landmarks: [hand], gestures: [[]] });
+  assert.equal(features.shaka, 1);
+  assert.equal(features.fingerCount, 2);
 });
