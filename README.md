@@ -176,9 +176,23 @@ Hand recognition runs at a slightly lower cadence than face and pose inference t
 
 The **Crying Thumbs-Up Cat** now uses an actual recognized thumbs-up rather than approximating the gesture from wrist position.
 
+## Detection calibration and ambiguity rejection
+
+When the camera starts, the app collects a short neutral-face baseline before enabling meme matching. Blendshape signals are then measured relative to that user's baseline instead of treating raw MediaPipe scores as universal thresholds.
+
+The matching pipeline also:
+
+- smooths face, pose, and hand features across frames;
+- uses hard gates for the defining traits of each meme instead of allowing unrelated weak features to accumulate into a false match;
+- gives explicit pose and hand gestures precedence where appropriate;
+- rejects close, ambiguous competing matches unless the leading result is very strong;
+- requires repeated confirmation across frames before switching the active meme.
+
+This reduces accidental matches and makes thresholds more consistent between different faces and resting expressions. It does not guarantee perfect detection; real accuracy still depends on lighting, framing, camera quality, and future validation against a labeled test set.
+
 ## Face-tracked meme mask
 
-The selected meme is no longer displayed in a separate side panel. It is drawn onto the live camera canvas over the detected face.
+The selected meme is drawn directly onto the live camera canvas over the detected face as a square image.
 
 The overlay uses Face Landmarker geometry to track:
 
@@ -187,7 +201,7 @@ The overlay uses Face Landmarker geometry to track:
 - head-roll angle from the eye line;
 - smoothed movement between frames to reduce jitter.
 
-The meme stays active for a short release window when a rule briefly drops below its threshold, which reduces flicker while the user is moving. The source image is aspect-filled into an elliptical face mask and follows the user's face as they move around the frame.
+The meme stays active for a short release window when a rule briefly drops below its threshold, which reduces flicker while the user is moving. The source image is aspect-filled into a plain square and pasted directly over the tracked face. There is no ellipse, rounded clipping, or shaped mask.
 
 # Commands
 

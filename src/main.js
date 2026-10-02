@@ -7,11 +7,15 @@ import {
 } from '@mediapipe/tasks-vision';
 import {
   MEMES,
+  chooseConfidentCandidate,
   chooseStableMatch,
+  computeFaceBaseline,
   extractFaceFeatures,
   extractHandFeatures,
   extractPoseFeatures,
-  rankMemeMatches
+  normalizeFaceFeatures,
+  rankMemeMatches,
+  smoothFeatureGroup
 } from './detection.js';
 import {
   computeCoverRect,
@@ -27,7 +31,7 @@ app.innerHTML = `
       <div>
         <p class="eyebrow">LOCAL COMPUTER VISION</p>
         <h1>Meme Detector</h1>
-        <p class="subtitle">Make a face, pose, or hand gesture and the matching meme will snap onto your face in real time.</p>
+        <p class="subtitle">Make a face, pose, or hand gesture and the matching meme will snap onto your face in real time after a quick neutral-face calibration.</p>
       </div>
       <div class="privacy-pill"><span></span> Camera stays local</div>
     </header>
@@ -55,14 +59,14 @@ app.innerHTML = `
           <div id="activeMeme" class="active-meme idle">
             <span class="active-label">ACTIVE MEME</span>
             <strong id="matchTitle">Waiting for a match</strong>
-            <small id="matchDetail">The meme will replace your face when a detection stabilizes.</small>
+            <small id="matchDetail">Hold a neutral face briefly when the camera starts. Then the meme will lock onto your face.</small>
           </div>
-          <div class="tracking-pill">Face-locked AR mask</div>
+          <div class="tracking-pill">Face-locked square overlay</div>
           <div class="fps" id="fps">0 FPS</div>
         </div>
         <div class="camera-note">
           <span>Tip</span>
-          Keep your face visible while posing. The mask follows face position, scale, and head tilt automatically.
+          Keep your face visible while posing. The square image follows face position, scale, and head tilt automatically.
         </div>
       </article>
     </section>
@@ -81,7 +85,7 @@ app.innerHTML = `
     <section class="library-section">
       <div class="section-title">
         <div><p class="eyebrow">CAT MEME LIBRARY</p><h2>Try these reactions</h2></div>
-        <p>Each meme becomes a face-tracked mask once its expression, pose, or gesture rule is detected.</p>
+        <p>Each meme becomes a face-tracked square overlay once its expression, pose, or gesture rule is detected.</p>
       </div>
       <div id="memeLibrary" class="meme-library"></div>
     </section>
@@ -139,8 +143,15 @@ let unmatchedFrames = 0;
 let faceOverlayTransform = null;
 let lastGestureResult = null;
 let lastGestureInferenceAt = -Infinity;
+let faceBaseline = null;
+let calibrationSamples = [];
+let calibrationComplete = false;
+let smoothedFace = null;
+let smoothedPose = null;
+let smoothedHand = null;
 const HAND_INFERENCE_INTERVAL_MS = 66;
-const MATCH_RELEASE_FRAMES = 10;
+const MATCH_RELEASE_FRAMES = 8;
+const CALIBRATION_SAMPLE_COUNT = 36;
 
 function setStatus(message, error = false) {
   els.status.textContent = message;
@@ -199,9 +210,18 @@ async function startCamera() {
     await els.video.play();
     resizeCanvas();
     running = true;
+    faceBaseline = null;
+    calibrationSamples = [];
+    calibrationComplete = false;
+    smoothedFace = null;
+    smoothedPose = null;
+    smoothedHand = null;
+    stableHistory = [];
+    activeMatch = null;
+    unmatchedFrames = 0;
     els.placeholder.hidden = true;
     els.stop.disabled = false;
-    setStatus('Detecting face + pose + hands');
+    setStatus('Calibration: look at the camera with a neutral face…');
     animationId = requestAnimationFrame(predictLoop);
   } catch (err) {
     console.error(err);
@@ -230,6 +250,12 @@ function stopCamera() {
   activeMatch = null;
   faceOverlayTransform = null;
   unmatchedFrames = 0;
+  faceBaseline = null;
+  calibrationSamples = [];
+  calibrationComplete = false;
+  smoothedFace = null;
+  smoothedPose = null;
+  smoothedHand = null;
   clearOverlay();
   updateActiveMemeHud(null, null);
   setStatus('Camera stopped');
@@ -260,46 +286,27 @@ function drawMemeFaceMask(faceLandmarks, match) {
     return;
   }
 
-  const rawTransform = computeFaceOverlayTransform(faceLandmarks, els.canvas.width, els.canvas.height);
+  const rawTransform = computeFaceOverlayTransform(faceLandmarks, els.canvas.width, els.canvas.height, {
+    widthScale: 1.42,
+    heightScale: 1.42,
+    verticalShift: -0.03
+  });
   if (!rawTransform) return;
-  faceOverlayTransform = smoothOverlayTransform(faceOverlayTransform, rawTransform, 0.34);
 
+  faceOverlayTransform = smoothOverlayTransform(faceOverlayTransform, rawTransform, 0.40);
   const image = memeImages.get(match.id);
   if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return;
 
   const { x, y, width, height, rotation } = faceOverlayTransform;
-  const cover = computeCoverRect(image.naturalWidth, image.naturalHeight, width, height);
+  const side = Math.max(width, height);
+  const cover = computeCoverRect(image.naturalWidth, image.naturalHeight, side, side);
   if (!cover) return;
 
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rotation);
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(73, 93, 122, 0.22)';
-  ctx.shadowBlur = Math.max(14, width * 0.055);
-  ctx.shadowOffsetY = Math.max(3, height * 0.018);
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
-  ctx.beginPath();
-  ctx.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  ctx.beginPath();
-  ctx.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.globalAlpha = 0.98;
+  ctx.globalAlpha = 1;
   ctx.drawImage(image, cover.x, cover.y, cover.width, cover.height);
-  ctx.restore();
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rotation);
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
-  ctx.lineWidth = Math.max(2, width * 0.008);
-  ctx.beginPath();
-  ctx.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
-  ctx.stroke();
   ctx.restore();
 }
 
@@ -323,6 +330,11 @@ function updateSignals(face, pose, hand) {
 
 function updateActiveMemeHud(match, candidate) {
   els.activeMeme.classList.toggle('idle', !match);
+  if (!calibrationComplete) {
+    els.matchTitle.textContent = 'Calibrating neutral face';
+    els.matchDetail.textContent = `${calibrationSamples.length}/${CALIBRATION_SAMPLE_COUNT} samples · Keep a relaxed, neutral expression.`;
+    return;
+  }
   if (match) {
     els.matchTitle.textContent = match.title;
     els.matchDetail.textContent = `${Math.round(match.score * 100)}% match · ${match.reason}`;
@@ -390,16 +402,37 @@ async function predictLoop(now) {
         lastGestureInferenceAt = timestamp;
       }
       const faceLandmarks = faceResult?.faceLandmarks?.[0] ?? null;
-      const face = extractFaceFeatures(categoriesFromFace(faceResult));
-      const pose = extractPoseFeatures(poseResult?.landmarks?.[0] ?? []);
-      const hand = extractHandFeatures(handResult ?? {});
-      const ranked = rankMemeMatches(face, pose, hand);
-      const top = ranked[0];
-      const stable = chooseStableMatch(stableHistory, top, { minFrames: 4, maxHistory: 6 });
+      const rawFace = extractFaceFeatures(categoriesFromFace(faceResult));
+      const rawPose = extractPoseFeatures(poseResult?.landmarks?.[0] ?? []);
+      const rawHand = extractHandFeatures(handResult ?? {});
+
+      if (!calibrationComplete) {
+        if (rawFace.present) calibrationSamples.push(rawFace);
+        if (calibrationSamples.length >= CALIBRATION_SAMPLE_COUNT) {
+          faceBaseline = computeFaceBaseline(calibrationSamples);
+          calibrationComplete = true;
+          setStatus('Detecting calibrated face + pose + hands');
+        }
+        clearOverlay();
+        updateSignals(rawFace, rawPose, rawHand);
+        updateActiveMemeHud(null, null);
+        updateFps(now);
+        animationId = requestAnimationFrame(predictLoop);
+        return;
+      }
+
+      const normalizedFace = normalizeFaceFeatures(rawFace, faceBaseline ?? {});
+      smoothedFace = smoothFeatureGroup(smoothedFace, normalizedFace, 0.48);
+      smoothedPose = smoothFeatureGroup(smoothedPose, rawPose, 0.58);
+      smoothedHand = smoothFeatureGroup(smoothedHand, rawHand, 0.62);
+
+      const ranked = rankMemeMatches(smoothedFace, smoothedPose, smoothedHand);
+      const candidate = chooseConfidentCandidate(ranked, { minMargin: 0.09, strongScore: 0.84 });
+      const stable = chooseStableMatch(stableHistory, candidate, { minFrames: 3, maxHistory: 5 });
       stableHistory = stable.history;
-      renderMatch(stable.match, top);
+      renderMatch(stable.match, candidate ?? ranked[0]);
       drawMemeFaceMask(faceLandmarks, activeMatch);
-      updateSignals(face, pose, hand);
+      updateSignals(smoothedFace, smoothedPose, smoothedHand);
       updateFps(now);
     } catch (err) {
       console.error(err);
@@ -418,5 +451,5 @@ if (!navigator.mediaDevices?.getUserMedia) {
   els.start.disabled = true;
   setStatus('This browser does not support webcam access.', true);
 } else {
-  setStatus('Ready. First run requires npm run setup.');
+  setStatus('Ready. Start the camera to calibrate detection.');
 }

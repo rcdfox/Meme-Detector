@@ -27,6 +27,67 @@ export function extractFaceFeatures(categories = []) {
   };
 }
 
+const FACE_NUMERIC_KEYS = [
+  'smile', 'jawOpen', 'eyeWide', 'blink', 'squint',
+  'browUp', 'browDown', 'pucker', 'press', 'frown', 'sideEye'
+];
+
+const FACE_RESPONSE_CEILINGS = {
+  smile: 0.72,
+  jawOpen: 0.68,
+  eyeWide: 0.46,
+  blink: 0.58,
+  squint: 0.48,
+  browUp: 0.52,
+  browDown: 0.50,
+  pucker: 0.55,
+  press: 0.50,
+  frown: 0.48,
+  sideEye: 0.55
+};
+
+const median = (values) => {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+export function computeFaceBaseline(samples = []) {
+  const valid = samples.filter((sample) => sample?.present);
+  const baseline = { present: valid.length > 0 };
+  for (const key of FACE_NUMERIC_KEYS) {
+    baseline[key] = median(valid.map((sample) => clamp01(sample?.[key] ?? 0)));
+  }
+  return baseline;
+}
+
+export function normalizeFaceFeatures(face = {}, baseline = {}) {
+  if (!face.present) return { ...face, present: false };
+  const normalized = { present: true };
+  for (const key of FACE_NUMERIC_KEYS) {
+    const raw = clamp01(face[key] ?? 0);
+    const base = clamp01(baseline[key] ?? 0);
+    const ceiling = Math.max(base + 0.12, FACE_RESPONSE_CEILINGS[key] ?? 0.55);
+    const noiseFloor = key === 'eyeWide' || key === 'sideEye' ? 0.012 : 0.018;
+    normalized[key] = clamp01((raw - base - noiseFloor) / Math.max(0.08, ceiling - base - noiseFloor));
+  }
+  return normalized;
+}
+
+export function smoothFeatureGroup(previous, next = {}, alpha = 0.42) {
+  if (!previous) return { ...next };
+  const t = Math.max(0, Math.min(1, alpha));
+  const result = { ...next };
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const oldValue = Number.isFinite(previous[key]) ? previous[key] : value;
+      result[key] = oldValue + (value - oldValue) * t;
+    }
+  }
+  return result;
+}
+
 const P = {
   nose: 0,
   leftShoulder: 11,
@@ -195,73 +256,167 @@ const memeById = new Map(MEMES.map((m) => [m.id, m]));
 export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
   const f = {
     present: face.present ?? false,
-    smile: face.smile ?? 0,
-    jawOpen: face.jawOpen ?? 0,
-    eyeWide: face.eyeWide ?? 0,
-    blink: face.blink ?? 0,
-    squint: face.squint ?? 0,
-    browUp: face.browUp ?? 0,
-    browDown: face.browDown ?? 0,
-    pucker: face.pucker ?? 0,
-    press: face.press ?? 0,
-    frown: face.frown ?? 0,
-    sideEye: face.sideEye ?? 0
+    smile: clamp01(face.smile ?? 0),
+    jawOpen: clamp01(face.jawOpen ?? 0),
+    eyeWide: clamp01(face.eyeWide ?? 0),
+    blink: clamp01(face.blink ?? 0),
+    squint: clamp01(face.squint ?? 0),
+    browUp: clamp01(face.browUp ?? 0),
+    browDown: clamp01(face.browDown ?? 0),
+    pucker: clamp01(face.pucker ?? 0),
+    press: clamp01(face.press ?? 0),
+    frown: clamp01(face.frown ?? 0),
+    sideEye: clamp01(face.sideEye ?? 0)
   };
   const p = {
-    bothHandsUp: pose.bothHandsUp ?? 0,
-    oneHandUp: pose.oneHandUp ?? 0,
-    handNearFace: pose.handNearFace ?? 0,
-    handsNearFace: pose.handsNearFace ?? 0,
-    armsCrossed: pose.armsCrossed ?? 0,
-    flex: pose.flex ?? 0,
-    shrug: pose.shrug ?? 0,
-    dab: pose.dab ?? 0
+    bothHandsUp: clamp01(pose.bothHandsUp ?? 0),
+    oneHandUp: clamp01(pose.oneHandUp ?? 0),
+    handNearFace: clamp01(pose.handNearFace ?? 0),
+    handsNearFace: clamp01((pose.handsNearFace ?? 0) / 2),
+    armsCrossed: clamp01(pose.armsCrossed ?? 0),
+    flex: clamp01(pose.flex ?? 0),
+    shrug: clamp01(pose.shrug ?? 0),
+    dab: clamp01(pose.dab ?? 0)
   };
   const h = {
-    thumbUp: hand.thumbUp ?? 0,
-    thumbDown: hand.thumbDown ?? 0,
-    pointingUp: hand.pointingUp ?? 0,
-    victory: hand.victory ?? 0,
-    openPalm: hand.openPalm ?? 0,
-    closedFist: hand.closedFist ?? 0,
-    iLoveYou: hand.iLoveYou ?? 0,
-    pinch: hand.pinch ?? 0,
-    fingerCountNorm: hand.fingerCountNorm ?? 0
+    thumbUp: clamp01(hand.thumbUp ?? 0),
+    thumbDown: clamp01(hand.thumbDown ?? 0),
+    pointingUp: clamp01(hand.pointingUp ?? 0),
+    victory: clamp01(hand.victory ?? 0),
+    openPalm: clamp01(hand.openPalm ?? 0),
+    closedFist: clamp01(hand.closedFist ?? 0),
+    iLoveYou: clamp01(hand.iLoveYou ?? 0),
+    pinch: clamp01(hand.pinch ?? 0),
+    fingerCountNorm: clamp01(hand.fingerCountNorm ?? 0)
   };
 
-  const expressionActivity = Math.max(
-    f.smile, f.jawOpen, f.eyeWide, f.browUp, f.browDown,
-    f.pucker, f.frown, f.sideEye, f.squint
+  const low = (value, ceiling) => clamp01((ceiling - value) / Math.max(ceiling, 0.001));
+  const evidence = (...values) => Math.max(...values.map(clamp01));
+  const faceActivity = evidence(
+    f.smile, f.jawOpen, f.eyeWide, f.squint, f.browUp,
+    f.browDown, f.pucker, f.frown, f.sideEye
   );
-  const neutral = f.present ? clamp01(1 - expressionActivity) : 0;
-  const mouthClosed = clamp01(1 - f.jawOpen);
-  const notSmiling = clamp01(1 - f.smile);
 
   const rules = [
-    ['thinking-cat', 0.46 * p.handNearFace + 0.24 * h.pointingUp + 0.12 * h.pinch + 0.10 * f.pucker + 0.08 * f.sideEye, 0.48, 'hand near face + pointing / thoughtful expression'],
-    ['crying-thumbs-up-cat', 0.56 * h.thumbUp + 0.24 * f.frown + 0.12 * f.browUp + 0.08 * p.oneHandUp, 0.44, 'sad expression + thumbs-up gesture'],
-    ['launch-cat', 0.82 * p.bothHandsUp + 0.10 * h.openPalm + 0.08 * f.eyeWide, 0.60, 'both hands raised'],
-    ['silly-tongue-cat', 0.48 * f.jawOpen + 0.30 * f.smile + 0.22 * f.eyeWide, 0.45, 'open mouth + smile + wide eyes'],
-    ['tired-cat', 0.40 * f.squint + 0.28 * f.jawOpen + 0.20 * f.frown + 0.12 * f.blink, 0.38, 'squint + open mouth / tired expression'],
-    ['judging-cat', 0.52 * f.sideEye + 0.28 * f.squint + 0.20 * f.frown, 0.38, 'side-eye + squint'],
-    ['crying-cat', 0.48 * f.frown + 0.30 * f.browUp + 0.22 * notSmiling, 0.40, 'sad / worried expression'],
-    ['concerned-cat', 0.42 * f.browDown + 0.30 * f.frown + 0.18 * f.squint + 0.10 * f.press, 0.36, 'lowered brows + frown'],
-    ['buffering-cat', 0.58 * f.eyeWide + 0.24 * mouthClosed + 0.18 * notSmiling, 0.48, 'wide eyes + frozen mouth'],
-    ['nerd-cat', 0.42 * f.eyeWide + 0.38 * f.browUp + 0.20 * f.smile, 0.43, 'wide eyes + raised brows'],
-    ['happy-cat', 0.62 * f.smile + 0.23 * f.eyeWide + 0.15 * mouthClosed, 0.43, 'bright smile + open eyes'],
-    ['smug-cat', 0.50 * f.smile + 0.27 * f.squint + 0.23 * f.sideEye, 0.40, 'small smile + squint / sideways glance'],
-    ['deadpan-cat', 0.74 * neutral + 0.16 * f.press + 0.10 * mouthClosed, 0.72, 'neutral straight-faced stare']
+    {
+      id: 'crying-thumbs-up-cat',
+      required: h.thumbUp >= 0.56 && evidence(f.frown, f.browUp) >= 0.26,
+      score: 0.62 * h.thumbUp + 0.20 * f.frown + 0.12 * f.browUp + 0.06 * p.oneHandUp,
+      threshold: 0.55,
+      reason: 'recognized thumbs-up + sad / worried face'
+    },
+    {
+      id: 'launch-cat',
+      required: p.bothHandsUp >= 0.64,
+      score: 0.78 * p.bothHandsUp + 0.14 * h.openPalm + 0.08 * f.eyeWide,
+      threshold: 0.62,
+      reason: 'both hands clearly raised'
+    },
+    {
+      id: 'thinking-cat',
+      required: p.handNearFace >= 0.56 &&
+        evidence(h.pointingUp, h.pinch, f.pucker, f.sideEye) >= 0.22,
+      score: 0.48 * p.handNearFace + 0.24 * h.pointingUp + 0.12 * h.pinch +
+        0.08 * f.pucker + 0.08 * f.sideEye,
+      threshold: 0.52,
+      reason: 'hand near face + pointing / pinch / thoughtful cue'
+    },
+    {
+      id: 'silly-tongue-cat',
+      required: f.present && f.jawOpen >= 0.42 && evidence(f.smile, f.eyeWide) >= 0.28,
+      score: 0.52 * f.jawOpen + 0.30 * f.smile + 0.18 * f.eyeWide,
+      threshold: 0.54,
+      reason: 'open mouth + playful smile / wide eyes'
+    },
+    {
+      id: 'judging-cat',
+      required: f.present && f.sideEye >= 0.40 && f.squint >= 0.18,
+      score: 0.58 * f.sideEye + 0.28 * f.squint + 0.14 * f.frown,
+      threshold: 0.52,
+      reason: 'clear sideways gaze + squint'
+    },
+    {
+      id: 'tired-cat',
+      required: f.present && f.squint >= 0.38 &&
+        evidence(f.jawOpen, f.blink, f.frown) >= 0.22 && f.smile < 0.32,
+      score: 0.46 * f.squint + 0.24 * f.jawOpen + 0.18 * f.blink + 0.12 * f.frown,
+      threshold: 0.51,
+      reason: 'squint + tired mouth / blink'
+    },
+    {
+      id: 'concerned-cat',
+      required: f.present && f.browDown >= 0.34 && f.frown >= 0.20 && f.smile < 0.25,
+      score: 0.46 * f.browDown + 0.34 * f.frown + 0.12 * f.squint + 0.08 * f.press,
+      threshold: 0.50,
+      reason: 'lowered brows + frown'
+    },
+    {
+      id: 'crying-cat',
+      required: f.present && f.frown >= 0.30 &&
+        evidence(f.browUp, f.press) >= 0.18 && f.smile < 0.22,
+      score: 0.52 * f.frown + 0.28 * f.browUp + 0.12 * f.press + 0.08 * low(f.smile, 0.35),
+      threshold: 0.50,
+      reason: 'frown + worried brows'
+    },
+    {
+      id: 'buffering-cat',
+      required: f.present && f.eyeWide >= 0.46 && f.jawOpen < 0.28 && f.smile < 0.28,
+      score: 0.64 * f.eyeWide + 0.20 * low(f.jawOpen, 0.35) + 0.16 * low(f.smile, 0.35),
+      threshold: 0.56,
+      reason: 'very wide eyes + frozen mouth'
+    },
+    {
+      id: 'nerd-cat',
+      required: f.present && f.eyeWide >= 0.34 && f.browUp >= 0.34,
+      score: 0.46 * f.eyeWide + 0.42 * f.browUp + 0.12 * f.smile,
+      threshold: 0.53,
+      reason: 'wide eyes + raised brows'
+    },
+    {
+      id: 'smug-cat',
+      required: f.present && f.smile >= 0.22 && f.smile < 0.70 &&
+        evidence(f.squint, f.sideEye) >= 0.24 && f.jawOpen < 0.30,
+      score: 0.46 * f.smile + 0.30 * f.squint + 0.24 * f.sideEye,
+      threshold: 0.48,
+      reason: 'small smile + squint / sideways glance'
+    },
+    {
+      id: 'happy-cat',
+      required: f.present && f.smile >= 0.48 && f.frown < 0.24 && f.browDown < 0.30,
+      score: 0.72 * f.smile + 0.16 * low(f.frown, 0.45) + 0.12 * low(f.browDown, 0.45),
+      threshold: 0.58,
+      reason: 'clear sustained smile'
+    },
+    {
+      id: 'deadpan-cat',
+      required: f.present && faceActivity < 0.23 && f.jawOpen < 0.14 && f.smile < 0.14,
+      score: 0.78 * low(faceActivity, 0.30) + 0.12 * low(f.jawOpen, 0.25) + 0.10 * low(f.smile, 0.25),
+      threshold: 0.70,
+      reason: 'stable neutral expression'
+    }
   ];
 
   return rules
-    .map(([id, score, threshold, reason]) => ({
+    .map(({ id, required, score, threshold, reason }) => ({
       ...memeById.get(id),
       score: clamp01(score),
       threshold,
       reason,
-      matched: score >= threshold
+      matched: Boolean(required) && score >= threshold
     }))
     .sort((a, b) => (b.matched - a.matched) || (b.score - a.score));
+}
+
+export function chooseConfidentCandidate(ranked = [], options = {}) {
+  const top = ranked[0];
+  if (!top?.matched) return null;
+  const second = ranked.find((candidate, index) => index > 0 && candidate.matched);
+  if (!second) return top;
+
+  const minMargin = options.minMargin ?? 0.075;
+  const strongScore = options.strongScore ?? 0.82;
+  if (top.score >= strongScore) return top;
+  return top.score - second.score >= minMargin ? top : null;
 }
 
 export function chooseStableMatch(history, candidate, options = {}) {
