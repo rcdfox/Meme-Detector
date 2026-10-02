@@ -3,9 +3,7 @@ import {
   FaceLandmarker,
   FilesetResolver,
   GestureRecognizer,
-  HandLandmarker,
-  PoseLandmarker,
-  DrawingUtils
+  PoseLandmarker
 } from '@mediapipe/tasks-vision';
 import {
   MEMES,
@@ -15,6 +13,11 @@ import {
   extractPoseFeatures,
   rankMemeMatches
 } from './detection.js';
+import {
+  computeCoverRect,
+  computeFaceOverlayTransform,
+  smoothOverlayTransform
+} from './overlay.js';
 
 const app = document.querySelector('#app');
 
@@ -24,16 +27,16 @@ app.innerHTML = `
       <div>
         <p class="eyebrow">LOCAL COMPUTER VISION</p>
         <h1>Meme Detector</h1>
-        <p class="subtitle">Match your expression or pose to a meme in real time. Camera frames are processed on your device.</p>
+        <p class="subtitle">Make a face, pose, or hand gesture and the matching meme will snap onto your face in real time.</p>
       </div>
-      <div class="privacy-pill"><span></span> Local camera processing</div>
+      <div class="privacy-pill"><span></span> Camera stays local</div>
     </header>
 
     <section class="workspace">
       <article class="camera-card panel">
         <div class="panel-head">
           <div>
-            <p class="label">LIVE CAMERA</p>
+            <p class="label">LIVE MEME CAM</p>
             <p id="status" class="status">Models not loaded</p>
           </div>
           <div class="actions">
@@ -45,51 +48,40 @@ app.innerHTML = `
           <video id="webcam" autoplay playsinline muted></video>
           <canvas id="overlay"></canvas>
           <div id="cameraPlaceholder" class="placeholder">
-            <div class="placeholder-icon">◎</div>
-            <strong>Camera is off</strong>
-            <span>Press “Start camera” and allow browser access.</span>
+            <div class="placeholder-icon">☺</div>
+            <strong>Ready for a meme face</strong>
+            <span>Start the camera, then try smiling, staring, pointing, or giving a thumbs-up.</span>
           </div>
+          <div id="activeMeme" class="active-meme idle">
+            <span class="active-label">ACTIVE MEME</span>
+            <strong id="matchTitle">Waiting for a match</strong>
+            <small id="matchDetail">The meme will replace your face when a detection stabilizes.</small>
+          </div>
+          <div class="tracking-pill">Face-locked AR mask</div>
           <div class="fps" id="fps">0 FPS</div>
         </div>
-      </article>
-
-      <article class="match-card panel">
-        <div class="panel-head">
-          <div>
-            <p class="label">BEST MATCH</p>
-            <p id="confidence" class="status">Waiting for camera</p>
-          </div>
-        </div>
-        <div id="matchStage" class="match-stage empty">
-          <img id="matchImage" alt="Detected meme" />
-          <div id="emptyMatch">
-            <div class="big-question">?</div>
-            <h2>Show me a meme pose</h2>
-            <p>Try a deadpan stare, wide eyes, a big smile, a sad face, side-eye, a thumbs-up, a peace sign, pointing, or raising your arms.</p>
-          </div>
-        </div>
-        <div class="match-meta">
-          <div><span>Detected</span><strong id="matchTitle">Nothing yet</strong></div>
-          <div><span>Signal</span><strong id="matchReason">—</strong></div>
+        <div class="camera-note">
+          <span>Tip</span>
+          Keep your face visible while posing. The mask follows face position, scale, and head tilt automatically.
         </div>
       </article>
     </section>
 
     <section class="lower-grid">
       <article class="panel diagnostics">
-        <div class="panel-head"><div><p class="label">DETECTION SIGNALS</p><p class="status">Useful for tuning thresholds</p></div></div>
+        <div class="panel-head"><div><p class="label">DETECTION SIGNALS</p><p class="status">Live signals used by the matcher</p></div></div>
         <div id="signals" class="signals"></div>
       </article>
       <article class="panel history-panel">
-        <div class="panel-head"><div><p class="label">RECENT MATCHES</p><p class="status">Stabilized detections only</p></div></div>
+        <div class="panel-head"><div><p class="label">RECENT MATCHES</p><p class="status">Stabilized detections</p></div></div>
         <div id="history" class="history"><p class="muted">No matches yet.</p></div>
       </article>
     </section>
 
     <section class="library-section">
       <div class="section-title">
-        <div><p class="eyebrow">CAT MEME LIBRARY</p><h2>Try these detections</h2></div>
-        <p>The detector now matches your face, pose, and hand gestures to the supplied silly-cat meme images. More cat and hamster images can be added later without retraining the MediaPipe models.</p>
+        <div><p class="eyebrow">CAT MEME LIBRARY</p><h2>Try these reactions</h2></div>
+        <p>Each meme becomes a face-tracked mask once its expression, pose, or gesture rule is detected.</p>
       </div>
       <div id="memeLibrary" class="meme-library"></div>
     </section>
@@ -99,7 +91,7 @@ app.innerHTML = `
       <span>MediaPipe Face + Pose + Gesture Recognition</span>
     </footer>
   </main>
-`;
+`
 
 const els = {
   video: document.querySelector('#webcam'),
@@ -109,12 +101,9 @@ const els = {
   stop: document.querySelector('#stopBtn'),
   status: document.querySelector('#status'),
   fps: document.querySelector('#fps'),
-  matchStage: document.querySelector('#matchStage'),
-  matchImage: document.querySelector('#matchImage'),
-  emptyMatch: document.querySelector('#emptyMatch'),
+  activeMeme: document.querySelector('#activeMeme'),
   matchTitle: document.querySelector('#matchTitle'),
-  matchReason: document.querySelector('#matchReason'),
-  confidence: document.querySelector('#confidence'),
+  matchDetail: document.querySelector('#matchDetail'),
   signals: document.querySelector('#signals'),
   history: document.querySelector('#history'),
   library: document.querySelector('#memeLibrary')
@@ -127,6 +116,13 @@ els.library.innerHTML = MEMES.map((m) => `
   </div>
 `).join('');
 
+const memeImages = new Map(MEMES.map((meme) => {
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = meme.asset;
+  return [meme.id, image];
+}));
+
 let faceLandmarker = null;
 let poseLandmarker = null;
 let gestureRecognizer = null;
@@ -138,9 +134,13 @@ let stableHistory = [];
 let recentMatches = [];
 let frameTimes = [];
 let lastRenderedMatch = null;
+let activeMatch = null;
+let unmatchedFrames = 0;
+let faceOverlayTransform = null;
 let lastGestureResult = null;
 let lastGestureInferenceAt = -Infinity;
 const HAND_INFERENCE_INTERVAL_MS = 66;
+const MATCH_RELEASE_FRAMES = 10;
 
 function setStatus(message, error = false) {
   els.status.textContent = message;
@@ -227,38 +227,80 @@ function stopCamera() {
   els.start.disabled = false;
   els.stop.disabled = true;
   els.fps.textContent = '0 FPS';
+  activeMatch = null;
+  faceOverlayTransform = null;
+  unmatchedFrames = 0;
+  clearOverlay();
+  updateActiveMemeHud(null, null);
   setStatus('Camera stopped');
 }
 
 function resizeCanvas() {
   const width = els.video.videoWidth || 1280;
   const height = els.video.videoHeight || 720;
-  els.canvas.width = width;
-  els.canvas.height = height;
+  if (els.canvas.width !== width) els.canvas.width = width;
+  if (els.canvas.height !== height) els.canvas.height = height;
 }
 
 function categoriesFromFace(result) {
   return result?.faceBlendshapes?.[0]?.categories ?? [];
 }
 
-function drawLandmarks(faceResult, poseResult, handResult) {
+function clearOverlay() {
   const ctx = els.canvas.getContext('2d');
   ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
-  const drawing = new DrawingUtils(ctx);
+}
 
-  const face = faceResult?.faceLandmarks?.[0];
-  if (face) {
-    drawing.drawConnectors(face, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: '#7dd3fc', lineWidth: 1.5 });
+function drawMemeFaceMask(faceLandmarks, match) {
+  const ctx = els.canvas.getContext('2d');
+  ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
+
+  if (!faceLandmarks || !match) {
+    if (!faceLandmarks) faceOverlayTransform = null;
+    return;
   }
-  const pose = poseResult?.landmarks?.[0];
-  if (pose) {
-    drawing.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: '#a7f3d0', lineWidth: 2 });
-    drawing.drawLandmarks(pose, { color: '#ecfeff', radius: 2 });
-  }
-  for (const hand of handResult?.landmarks ?? []) {
-    drawing.drawConnectors(hand, HandLandmarker.HAND_CONNECTIONS, { color: '#fde68a', lineWidth: 2 });
-    drawing.drawLandmarks(hand, { color: '#fff7ed', radius: 2.5 });
-  }
+
+  const rawTransform = computeFaceOverlayTransform(faceLandmarks, els.canvas.width, els.canvas.height);
+  if (!rawTransform) return;
+  faceOverlayTransform = smoothOverlayTransform(faceOverlayTransform, rawTransform, 0.34);
+
+  const image = memeImages.get(match.id);
+  if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return;
+
+  const { x, y, width, height, rotation } = faceOverlayTransform;
+  const cover = computeCoverRect(image.naturalWidth, image.naturalHeight, width, height);
+  if (!cover) return;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(73, 93, 122, 0.22)';
+  ctx.shadowBlur = Math.max(14, width * 0.055);
+  ctx.shadowOffsetY = Math.max(3, height * 0.018);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.globalAlpha = 0.98;
+  ctx.drawImage(image, cover.x, cover.y, cover.width, cover.height);
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+  ctx.lineWidth = Math.max(2, width * 0.008);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function updateSignals(face, pose, hand) {
@@ -279,24 +321,36 @@ function updateSignals(face, pose, hand) {
   `).join('');
 }
 
+function updateActiveMemeHud(match, candidate) {
+  els.activeMeme.classList.toggle('idle', !match);
+  if (match) {
+    els.matchTitle.textContent = match.title;
+    els.matchDetail.textContent = `${Math.round(match.score * 100)}% match · ${match.reason}`;
+    return;
+  }
+  els.matchTitle.textContent = candidate ? `Closest: ${candidate.title}` : 'Waiting for a match';
+  els.matchDetail.textContent = candidate
+    ? `${Math.round(candidate.score * 100)}% · Hold the expression or pose a moment longer.`
+    : 'The meme will replace your face when a detection stabilizes.';
+}
+
 function renderMatch(match, topCandidate) {
   if (match) {
+    unmatchedFrames = 0;
+    activeMatch = match;
     if (lastRenderedMatch?.id !== match.id) {
       recentMatches = [{ ...match, at: new Date() }, ...recentMatches.filter((m) => m.id !== match.id)].slice(0, 5);
       renderHistory();
     }
     lastRenderedMatch = match;
-    els.matchStage.classList.remove('empty');
-    els.matchImage.src = match.asset;
-    els.matchImage.alt = match.title;
-    els.matchImage.hidden = false;
-    els.emptyMatch.hidden = true;
-    els.matchTitle.textContent = match.title;
-    els.matchReason.textContent = match.reason;
-    els.confidence.textContent = `${Math.round(match.score * 100)}% rule confidence`;
-  } else {
-    els.confidence.textContent = topCandidate ? `Closest: ${topCandidate.title} (${Math.round(topCandidate.score * 100)}%)` : 'Looking for a face or pose';
+  } else if (!topCandidate?.matched) {
+    unmatchedFrames += 1;
+    if (unmatchedFrames >= MATCH_RELEASE_FRAMES) {
+      activeMatch = null;
+      faceOverlayTransform = null;
+    }
   }
+  updateActiveMemeHud(activeMatch, topCandidate);
 }
 
 function renderHistory() {
@@ -321,6 +375,7 @@ async function predictLoop(now) {
   if (els.video.readyState >= 2 && els.video.currentTime !== lastVideoTime) {
     lastVideoTime = els.video.currentTime;
     try {
+      resizeCanvas();
       const timestamp = performance.now();
       const shouldRunHands = timestamp - lastGestureInferenceAt >= HAND_INFERENCE_INTERVAL_MS;
       const [faceResult, poseResult, handResult] = await Promise.all([
@@ -334,16 +389,17 @@ async function predictLoop(now) {
         lastGestureResult = handResult;
         lastGestureInferenceAt = timestamp;
       }
+      const faceLandmarks = faceResult?.faceLandmarks?.[0] ?? null;
       const face = extractFaceFeatures(categoriesFromFace(faceResult));
       const pose = extractPoseFeatures(poseResult?.landmarks?.[0] ?? []);
       const hand = extractHandFeatures(handResult ?? {});
       const ranked = rankMemeMatches(face, pose, hand);
       const top = ranked[0];
-      const stable = chooseStableMatch(stableHistory, top, { minFrames: 3, maxHistory: 5 });
+      const stable = chooseStableMatch(stableHistory, top, { minFrames: 4, maxHistory: 6 });
       stableHistory = stable.history;
-      drawLandmarks(faceResult, poseResult, handResult);
-      updateSignals(face, pose, hand);
       renderMatch(stable.match, top);
+      drawMemeFaceMask(faceLandmarks, activeMatch);
+      updateSignals(face, pose, hand);
       updateFps(now);
     } catch (err) {
       console.error(err);

@@ -1,6 +1,6 @@
 # Meme Detector
 
-A local-first computer-vision web app that uses a webcam to match a user's facial expression, body pose, and hand gesture to a silly cat meme in real time.
+A local-first computer-vision web app that uses a webcam to match a user's facial expression, body pose, and hand gesture to a silly cat meme in real time. Once matched, the meme is rendered directly over the user's face as a tracked AR-style mask.
 
 The app runs in the browser with MediaPipe. There is no account system, database, upload endpoint, or application backend. Webcam frames are processed locally on the user's device.
 
@@ -175,6 +175,19 @@ The app currently exposes:
 Hand recognition runs at a slightly lower cadence than face and pose inference to reduce browser CPU/GPU load. The latest hand result is reused between hand-inference frames.
 
 The **Crying Thumbs-Up Cat** now uses an actual recognized thumbs-up rather than approximating the gesture from wrist position.
+
+## Face-tracked meme mask
+
+The selected meme is no longer displayed in a separate side panel. It is drawn onto the live camera canvas over the detected face.
+
+The overlay uses Face Landmarker geometry to track:
+
+- face center position;
+- face width and height;
+- head-roll angle from the eye line;
+- smoothed movement between frames to reduce jitter.
+
+The meme stays active for a short release window when a rule briefly drops below its threshold, which reduces flicker while the user is moving. The source image is aspect-filled into an elliptical face mask and follows the user's face as they move around the frame.
 
 # Commands
 
