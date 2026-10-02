@@ -175,7 +175,7 @@ The app currently exposes:
 - pinch distance from thumb/index landmarks
 - approximate extended-finger count
 
-Hand recognition runs at a slightly lower cadence than face and pose inference to reduce browser CPU/GPU load. The latest hand result is reused between hand-inference frames.
+Hand recognition runs at a slightly lower cadence than face and pose inference to reduce browser CPU/GPU load. The latest hand result is reused between hand-inference frames, while short-lived gesture evidence is decayed across nearby frames so a single dropped hand inference does not immediately erase a gesture.
 
 The **Crying Thumbs-Up Cat** now uses an actual recognized thumbs-up rather than approximating the gesture from wrist position.
 
@@ -192,6 +192,17 @@ The matching pipeline also:
 - requires repeated confirmation across frames before switching the active meme.
 
 This reduces accidental matches and makes thresholds more consistent between different faces and resting expressions. It does not guarantee perfect detection; real accuracy still depends on lighting, framing, camera quality, and future validation against a labeled test set.
+
+Additional non-training improvements now include:
+
+- **calibration-frame filtering** so obvious smiles, open mouths, blinks, and puckers are not used to establish the neutral baseline;
+- a **robust lower-middle baseline quantile** instead of relying on a simple average;
+- **continuous pose confidence** for raised hands and hand-near-face distance instead of all-or-nothing pose booleans;
+- **aspect-ratio-correct hand geometry** so finger distances behave more consistently in widescreen webcam frames;
+- **peak-hold temporal filtering** for short hand/pose gestures that may disappear for one inference frame;
+- **hierarchical matching**, giving explicit finger/hand/pose matches priority over broad facial-expression matches;
+- **confidence-weighted temporal confirmation**, allowing strong specific gestures to trigger quickly while requiring more evidence for ambiguous facial expressions;
+- **per-match hysteresis**, reducing rapid switching and preventing a valid match from disappearing from a small one-frame confidence dip.
 
 ## Face-tracked meme mask
 

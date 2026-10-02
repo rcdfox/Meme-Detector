@@ -8,11 +8,12 @@ import {
 import {
   MEMES,
   chooseConfidentCandidate,
-  chooseStableMatch,
+  chooseWeightedStableMatch,
   computeFaceBaseline,
   extractFaceFeatures,
   extractHandFeatures,
   extractPoseFeatures,
+  isCalibrationSampleSuitable,
   normalizeFaceFeatures,
   rankMemeMatches,
   smoothFeatureGroup
@@ -149,9 +150,9 @@ let calibrationComplete = false;
 let smoothedFace = null;
 let smoothedPose = null;
 let smoothedHand = null;
-const HAND_INFERENCE_INTERVAL_MS = 66;
+const HAND_INFERENCE_INTERVAL_MS = 50;
 const MATCH_RELEASE_FRAMES = 8;
-const CALIBRATION_SAMPLE_COUNT = 36;
+const CALIBRATION_SAMPLE_COUNT = 42;
 
 function setStatus(message, error = false) {
   els.status.textContent = message;
@@ -221,7 +222,7 @@ async function startCamera() {
     unmatchedFrames = 0;
     els.placeholder.hidden = true;
     els.stop.disabled = false;
-    setStatus('Calibration: look at the camera with a neutral face…');
+    setStatus('Calibration: hold a relaxed neutral face and look at the camera…');
     animationId = requestAnimationFrame(predictLoop);
   } catch (err) {
     console.error(err);
@@ -338,7 +339,7 @@ function updateActiveMemeHud(match, candidate) {
   }
   if (match) {
     els.matchTitle.textContent = match.title;
-    els.matchDetail.textContent = `${Math.round(match.score * 100)}% match · ${match.reason}`;
+    els.matchDetail.textContent = `${Math.round(match.score * 100)}% match · ${match.reason}${match.heldByHysteresis ? ' · held stable' : ''}`;
     return;
   }
   els.matchTitle.textContent = candidate ? `Closest: ${candidate.title}` : 'Waiting for a match';
@@ -347,7 +348,7 @@ function updateActiveMemeHud(match, candidate) {
     : 'The meme will replace your face when a detection stabilizes.';
 }
 
-function renderMatch(match, topCandidate) {
+function renderMatch(match, acceptedCandidate, closestCandidate) {
   if (match) {
     unmatchedFrames = 0;
     activeMatch = match;
@@ -356,14 +357,19 @@ function renderMatch(match, topCandidate) {
       renderHistory();
     }
     lastRenderedMatch = match;
-  } else if (!topCandidate?.matched) {
+  } else if (!acceptedCandidate) {
     unmatchedFrames += 1;
     if (unmatchedFrames >= MATCH_RELEASE_FRAMES) {
       activeMatch = null;
       faceOverlayTransform = null;
     }
+  } else {
+    // A valid candidate is accumulating temporal evidence. Keep the current
+    // overlay briefly instead of flickering, but do not count it as a miss.
+    unmatchedFrames = Math.max(0, unmatchedFrames - 1);
   }
-  updateActiveMemeHud(activeMatch, topCandidate);
+
+  updateActiveMemeHud(activeMatch, acceptedCandidate ?? closestCandidate);
 }
 
 function renderHistory() {
@@ -405,10 +411,14 @@ async function predictLoop(now) {
       const faceLandmarks = faceResult?.faceLandmarks?.[0] ?? null;
       const rawFace = extractFaceFeatures(categoriesFromFace(faceResult));
       const rawPose = extractPoseFeatures(poseResult?.landmarks?.[0] ?? []);
-      const rawHand = extractHandFeatures(handResult ?? {}, faceLandmarks ?? []);
+      const rawHand = extractHandFeatures(
+        handResult ?? {},
+        faceLandmarks ?? [],
+        els.canvas.width / Math.max(1, els.canvas.height)
+      );
 
       if (!calibrationComplete) {
-        if (rawFace.present) calibrationSamples.push(rawFace);
+        if (isCalibrationSampleSuitable(rawFace)) calibrationSamples.push(rawFace);
         if (calibrationSamples.length >= CALIBRATION_SAMPLE_COUNT) {
           faceBaseline = computeFaceBaseline(calibrationSamples);
           calibrationComplete = true;
@@ -423,15 +433,33 @@ async function predictLoop(now) {
       }
 
       const normalizedFace = normalizeFaceFeatures(rawFace, faceBaseline ?? {});
-      smoothedFace = smoothFeatureGroup(smoothedFace, normalizedFace, 0.48);
-      smoothedPose = smoothFeatureGroup(smoothedPose, rawPose, 0.58);
-      smoothedHand = smoothFeatureGroup(smoothedHand, rawHand, 0.62);
+      smoothedFace = smoothFeatureGroup(smoothedFace, normalizedFace, 0.52);
+      smoothedPose = smoothFeatureGroup(smoothedPose, rawPose, 0.62, {
+        peakHoldKeys: ['bothHandsUp', 'oneHandUp', 'handNearFace', 'handsNearFace', 'armsCrossed', 'flex', 'shrug', 'dab'],
+        decay: 0.76
+      });
+      smoothedHand = smoothFeatureGroup(smoothedHand, rawHand, 0.70, {
+        peakHoldKeys: [
+          'thumbUp', 'builtInThumbUp', 'geometricThumbUp',
+          'pointingUp', 'indexOnly', 'indexNearFace', 'shaka',
+          'victory', 'openPalm', 'closedFist', 'iLoveYou', 'pinch'
+        ],
+        decay: 0.84
+      });
 
       const ranked = rankMemeMatches(smoothedFace, smoothedPose, smoothedHand);
-      const candidate = chooseConfidentCandidate(ranked, { minMargin: 0.09, strongScore: 0.84 });
-      const stable = chooseStableMatch(stableHistory, candidate, { minFrames: 3, maxHistory: 5 });
+      const candidate = chooseConfidentCandidate(ranked, {
+        activeId: activeMatch?.id ?? null,
+        switchMargin: 0.11,
+        holdFactor: 0.86
+      });
+      const stable = chooseWeightedStableMatch(stableHistory, candidate, {
+        minHits: 3,
+        maxHistory: 6,
+        minEvidence: 1.70
+      });
       stableHistory = stable.history;
-      renderMatch(stable.match, candidate ?? ranked[0]);
+      renderMatch(stable.match, candidate, ranked[0]);
       drawMemeFaceMask(faceLandmarks, activeMatch);
       updateSignals(smoothedFace, smoothedPose, smoothedHand);
       updateFps(now);

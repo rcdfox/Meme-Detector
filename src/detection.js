@@ -86,11 +86,30 @@ const median = (values) => {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 };
 
+export function isCalibrationSampleSuitable(face = {}) {
+  if (!face.present) return false;
+  // Only reject obviously expressive/transient frames. The baseline itself remains
+  // person-specific, so naturally raised brows or a mild resting smile are allowed.
+  if ((face.jawOpen ?? 0) > 0.42) return false;
+  if ((face.smileMax ?? face.smile ?? 0) > 0.58) return false;
+  if ((face.blink ?? 0) > 0.82) return false;
+  if ((face.pucker ?? 0) > 0.62) return false;
+  return true;
+}
+
 export function computeFaceBaseline(samples = []) {
   const valid = samples.filter((sample) => sample?.present);
   const baseline = { present: valid.length > 0 };
   for (const key of FACE_NUMERIC_KEYS) {
-    baseline[key] = median(valid.map((sample) => clamp01(sample?.[key] ?? 0)));
+    // A lower-middle quantile is more robust than a simple mean/median when the
+    // user moves slightly during startup or briefly makes an expression.
+    const values = valid.map((sample) => clamp01(sample?.[key] ?? 0)).sort((a, b) => a - b);
+    if (!values.length) {
+      baseline[key] = 0;
+      continue;
+    }
+    const position = Math.min(values.length - 1, Math.max(0, Math.round((values.length - 1) * 0.38)));
+    baseline[key] = values[position];
   }
   return baseline;
 }
@@ -108,13 +127,21 @@ export function normalizeFaceFeatures(face = {}, baseline = {}) {
   return normalized;
 }
 
-export function smoothFeatureGroup(previous, next = {}, alpha = 0.42) {
+export function smoothFeatureGroup(previous, next = {}, alpha = 0.42, options = {}) {
   if (!previous) return { ...next };
   const t = Math.max(0, Math.min(1, alpha));
+  const peakHoldKeys = new Set(options.peakHoldKeys ?? []);
+  const decay = Math.max(0, Math.min(1, options.decay ?? 0.82));
   const result = { ...next };
+
   for (const [key, value] of Object.entries(next)) {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      const oldValue = Number.isFinite(previous[key]) ? previous[key] : value;
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    const oldValue = Number.isFinite(previous[key]) ? previous[key] : value;
+    if (peakHoldKeys.has(key)) {
+      // Preserve short-lived gesture/pose evidence for a few frames. This is
+      // especially useful because Gesture Recognizer runs at a lower cadence.
+      result[key] = Math.max(value, oldValue * decay);
+    } else {
       result[key] = oldValue + (value - oldValue) * t;
     }
   }
@@ -163,10 +190,23 @@ export function extractPoseFeatures(landmarks = []) {
   const shoulderY = ls && rs ? (ls.y + rs.y) / 2 : 0.4;
   const hipY = lh && rh ? (lh.y + rh.y) / 2 : shoulderY + 0.3;
 
-  const leftUp = visible(lw) && visible(ls) && lw.y < ls.y - 0.035;
-  const rightUp = visible(rw) && visible(rs) && rw.y < rs.y - 0.035;
-  const leftNearFace = visible(lw) && visible(nose) && dist(lw, nose) < shoulderWidth * 0.82;
-  const rightNearFace = visible(rw) && visible(nose) && dist(rw, nose) < shoulderWidth * 0.82;
+  const raisedScore = (wrist, shoulder) => {
+    if (!visible(wrist) || !visible(shoulder)) return 0;
+    return clamp01((shoulder.y - wrist.y + shoulderWidth * 0.02) / (shoulderWidth * 0.48));
+  };
+  const nearFaceScore = (wrist) => {
+    if (!visible(wrist) || !visible(nose)) return 0;
+    return clamp01(1 - dist(wrist, nose) / (shoulderWidth * 1.04));
+  };
+
+  const leftUpScore = raisedScore(lw, ls);
+  const rightUpScore = raisedScore(rw, rs);
+  const leftUp = leftUpScore >= 0.52;
+  const rightUp = rightUpScore >= 0.52;
+  const leftNearFaceScore = nearFaceScore(lw);
+  const rightNearFaceScore = nearFaceScore(rw);
+  const leftNearFace = leftNearFaceScore >= 0.38;
+  const rightNearFace = rightNearFaceScore >= 0.38;
   const leftElbowAngle = angle(ls, le, lw);
   const rightElbowAngle = angle(rs, re, rw);
 
@@ -188,10 +228,10 @@ export function extractPoseFeatures(landmarks = []) {
 
   return {
     present,
-    bothHandsUp: leftUp && rightUp ? 1 : 0,
-    oneHandUp: leftUp !== rightUp ? 1 : 0,
-    handNearFace: leftNearFace || rightNearFace ? 1 : 0,
-    handsNearFace: (leftNearFace ? 1 : 0) + (rightNearFace ? 1 : 0),
+    bothHandsUp: Math.min(leftUpScore, rightUpScore),
+    oneHandUp: clamp01(Math.max(leftUpScore, rightUpScore) - Math.min(leftUpScore, rightUpScore) * 0.55),
+    handNearFace: Math.max(leftNearFaceScore, rightNearFaceScore),
+    handsNearFace: leftNearFaceScore + rightNearFaceScore,
     armsCrossed: crossed ? 1 : 0,
     flex: flex ? 1 : 0,
     shrug: shrugLeft && shrugRight ? 1 : 0,
@@ -210,21 +250,21 @@ function gestureScore(result = {}, gestureName) {
   return best;
 }
 
-function handDistance(a, b) {
-  return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : Infinity;
+function handDistance(a, b, aspect = 1) {
+  return a && b ? Math.hypot((a.x - b.x) * aspect, a.y - b.y) : Infinity;
 }
 
-function fingerExtended(landmarks, mcpIndex, pipIndex, tipIndex, ratio = 1.12) {
+function fingerExtended(landmarks, mcpIndex, pipIndex, tipIndex, ratio = 1.12, aspect = 1) {
   const wrist = landmarks?.[0];
   const mcp = landmarks?.[mcpIndex];
   const pip = landmarks?.[pipIndex];
   const tip = landmarks?.[tipIndex];
   if (!wrist || !mcp || !pip || !tip) return false;
-  return handDistance(tip, wrist) > handDistance(pip, wrist) * ratio &&
-    handDistance(tip, mcp) > handDistance(pip, mcp) * 1.02;
+  return handDistance(tip, wrist, aspect) > handDistance(pip, wrist, aspect) * ratio &&
+    handDistance(tip, mcp, aspect) > handDistance(pip, mcp) * 1.02;
 }
 
-function handShapeFeatures(landmarks = []) {
+function handShapeFeatures(landmarks = [], aspect = 1) {
   if (landmarks.length < 21) {
     return {
       pinch: 0, fingerCount: 0, indexOnly: 0, shaka: 0, geometricThumbUp: 0,
@@ -233,13 +273,13 @@ function handShapeFeatures(landmarks = []) {
     };
   }
 
-  const palmScale = Math.max(0.035, handDistance(landmarks[5], landmarks[17]));
-  const pinch = clamp01(1 - handDistance(landmarks[4], landmarks[8]) / (palmScale * 0.55));
-  const thumbExtended = fingerExtended(landmarks, 1, 3, 4, 1.03);
-  const indexExtended = fingerExtended(landmarks, 5, 6, 8);
-  const middleExtended = fingerExtended(landmarks, 9, 10, 12);
-  const ringExtended = fingerExtended(landmarks, 13, 14, 16);
-  const pinkyExtended = fingerExtended(landmarks, 17, 18, 20);
+  const palmScale = Math.max(0.035, handDistance(landmarks[5], landmarks[17], aspect));
+  const pinch = clamp01(1 - handDistance(landmarks[4], landmarks[8], aspect) / (palmScale * 0.55));
+  const thumbExtended = fingerExtended(landmarks, 1, 3, 4, 1.03, aspect);
+  const indexExtended = fingerExtended(landmarks, 5, 6, 8, 1.12, aspect);
+  const middleExtended = fingerExtended(landmarks, 9, 10, 12, 1.12, aspect);
+  const ringExtended = fingerExtended(landmarks, 13, 14, 16, 1.12, aspect);
+  const pinkyExtended = fingerExtended(landmarks, 17, 18, 20, 1.12, aspect);
 
   const indexOnly = indexExtended && !middleExtended && !ringExtended && !pinkyExtended ? 1 : 0;
   const shaka = thumbExtended && pinkyExtended && !indexExtended && !middleExtended && !ringExtended ? 1 : 0;
@@ -262,20 +302,21 @@ function handShapeFeatures(landmarks = []) {
   };
 }
 
-function faceReference(faceLandmarks = []) {
+function faceReference(faceLandmarks = [], aspect = 1) {
   const valid = faceLandmarks.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
   if (valid.length < 4) return null;
   const xs = valid.map((point) => point.x);
-  const faceWidth = Math.max(0.06, Math.max(...xs) - Math.min(...xs));
+  const faceWidth = Math.max(0.06, (Math.max(...xs) - Math.min(...xs)) * aspect);
   const anchors = [faceLandmarks[1], faceLandmarks[13], faceLandmarks[14], faceLandmarks[152]]
     .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
   return { faceWidth, anchors };
 }
 
-export function extractHandFeatures(result = {}, faceLandmarks = []) {
+export function extractHandFeatures(result = {}, faceLandmarks = [], frameAspect = 1) {
   const hands = result.landmarks ?? [];
-  const shapes = hands.map(handShapeFeatures);
-  const face = faceReference(faceLandmarks);
+  const aspect = Number.isFinite(frameAspect) && frameAspect > 0 ? frameAspect : 1;
+  const shapes = hands.map((landmarks) => handShapeFeatures(landmarks, aspect));
+  const face = faceReference(faceLandmarks, aspect);
   let bestGesture = { name: 'None', score: 0 };
   for (const handGestures of result.gestures ?? []) {
     const top = handGestures?.[0];
@@ -289,7 +330,7 @@ export function extractHandFeatures(result = {}, faceLandmarks = []) {
     for (const landmarks of hands) {
       const indexTip = landmarks?.[8];
       if (!indexTip) continue;
-      const nearest = Math.min(...face.anchors.map((anchor) => handDistance(indexTip, anchor)));
+      const nearest = Math.min(...face.anchors.map((anchor) => handDistance(indexTip, anchor, aspect)));
       indexNearFace = Math.max(indexNearFace, clamp01(1 - nearest / (face.faceWidth * 0.72)));
     }
   }
@@ -405,6 +446,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
   const rules = [
     {
       id: 'crying-thumbs-up-cat',
+      priority: 4,
       required: h.thumbUp >= 0.46 &&
         evidence(f.frownMax, f.browInnerUp, f.lowerDown, f.mouthShrugLower) >= 0.16,
       score: 0.66 * h.thumbUp + 0.10 * f.frownMax + 0.10 * f.browInnerUp +
@@ -414,6 +456,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'launch-cat',
+      priority: 3,
       required: p.bothHandsUp >= 0.64,
       score: 0.78 * p.bothHandsUp + 0.14 * h.openPalm + 0.08 * f.eyeWide,
       threshold: 0.62,
@@ -421,6 +464,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'thinking-cat',
+      priority: 4,
       required: evidence(p.handNearFace, h.indexNearFace) >= 0.46 &&
         evidence(h.indexOnly, h.pointingUp) >= 0.46,
       score: 0.34 * h.indexNearFace + 0.26 * h.indexOnly + 0.18 * h.pointingUp +
@@ -430,6 +474,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'silly-tongue-cat',
+      priority: 4,
       required: f.present && f.jawOpen >= 0.34 &&
         evidence(h.shaka, h.iLoveYou, h.openPalm * 0.55) >= 0.24,
       score: 0.40 * f.jawOpen + 0.12 * f.smileMax + 0.08 * f.eyeWide +
@@ -439,6 +484,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'judging-cat',
+      priority: 2,
       required: f.present && f.sideEye >= 0.40 && f.squint >= 0.18,
       score: 0.58 * f.sideEye + 0.28 * f.squint + 0.14 * f.frown,
       threshold: 0.52,
@@ -446,6 +492,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'tired-cat',
+      priority: 1,
       required: f.present && f.squint >= 0.38 &&
         evidence(f.jawOpen, f.blink, f.frown) >= 0.22 && f.smile < 0.32,
       score: 0.46 * f.squint + 0.24 * f.jawOpen + 0.18 * f.blink + 0.12 * f.frown,
@@ -454,6 +501,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'concerned-cat',
+      priority: 1,
       required: f.present && f.jawOpen < 0.26 && f.smileMax < 0.30 &&
         f.browDown >= 0.24 && evidence(f.press, f.frownMax, f.squintMax) >= 0.16,
       score: 0.42 * f.browDown + 0.22 * f.press + 0.18 * f.frownMax +
@@ -463,6 +511,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'crying-cat',
+      priority: 1,
       required: f.present && f.smileMax < 0.28 &&
         f.browInnerUp >= 0.20 &&
         evidence(f.frownMax, f.lowerDown, f.mouthShrugLower, f.press) >= 0.18,
@@ -473,6 +522,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'buffering-cat',
+      priority: 1,
       required: f.present && f.eyeWide >= 0.46 && f.jawOpen < 0.28 && f.smile < 0.28,
       score: 0.64 * f.eyeWide + 0.20 * low(f.jawOpen, 0.35) + 0.16 * low(f.smile, 0.35),
       threshold: 0.56,
@@ -480,6 +530,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'nerd-cat',
+      priority: 1,
       required: f.present && f.eyeWide >= 0.34 && f.browUp >= 0.34,
       score: 0.46 * f.eyeWide + 0.42 * f.browUp + 0.12 * f.smile,
       threshold: 0.53,
@@ -487,6 +538,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'smug-cat',
+      priority: 1,
       required: f.present && f.jawOpen < 0.28 &&
         f.smileMax >= 0.22 &&
         evidence(f.smileAsymmetry, f.squintAsymmetry, f.sideEye) >= 0.16,
@@ -497,6 +549,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'happy-cat',
+      priority: 1,
       required: f.present && f.smile >= 0.48 && f.frown < 0.24 && f.browDown < 0.30,
       score: 0.72 * f.smile + 0.16 * low(f.frown, 0.45) + 0.12 * low(f.browDown, 0.45),
       threshold: 0.58,
@@ -504,6 +557,7 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
     },
     {
       id: 'deadpan-cat',
+      priority: 0,
       required: f.present && faceActivity < 0.23 && f.jawOpen < 0.14 && f.smile < 0.14,
       score: 0.78 * low(faceActivity, 0.30) + 0.12 * low(f.jawOpen, 0.25) + 0.10 * low(f.smile, 0.25),
       threshold: 0.70,
@@ -512,26 +566,63 @@ export function rankMemeMatches(face = {}, pose = {}, hand = {}) {
   ];
 
   return rules
-    .map(({ id, required, score, threshold, reason }) => ({
+    .map(({ id, priority = 0, required, score, threshold, reason }) => ({
       ...memeById.get(id),
+      priority,
       score: clamp01(score),
       threshold,
       reason,
+      eligible: Boolean(required),
       matched: Boolean(required) && score >= threshold
     }))
-    .sort((a, b) => (b.matched - a.matched) || (b.score - a.score));
+    .sort((a, b) =>
+      (b.matched - a.matched) ||
+      ((b.matched ? b.priority : 0) - (a.matched ? a.priority : 0)) ||
+      (b.score - a.score)
+    );
 }
 
 export function chooseConfidentCandidate(ranked = [], options = {}) {
-  const top = ranked[0];
-  if (!top?.matched) return null;
-  const second = ranked.find((candidate, index) => index > 0 && candidate.matched);
-  if (!second) return top;
+  const matched = ranked.filter((candidate) => candidate?.matched);
+  if (!matched.length) {
+    const active = options.activeId ? ranked.find((candidate) => candidate.id === options.activeId) : null;
+    const holdFactor = options.holdFactor ?? 0.86;
+    if (active?.eligible && active.score >= active.threshold * holdFactor) {
+      return { ...active, matched: true, heldByHysteresis: true };
+    }
+    return null;
+  }
 
-  const minMargin = options.minMargin ?? 0.075;
-  const strongScore = options.strongScore ?? 0.82;
-  if (top.score >= strongScore) return top;
-  return top.score - second.score >= minMargin ? top : null;
+  // Gesture/pose-specific matches should not be rejected merely because a broad
+  // facial-expression class also scores well in the same frame.
+  const highestPriority = Math.max(...matched.map((candidate) => candidate.priority ?? 0));
+  const pool = matched
+    .filter((candidate) => (candidate.priority ?? 0) === highestPriority)
+    .sort((a, b) => b.score - a.score);
+
+  const top = pool[0];
+  const second = pool[1];
+  const minMargin = options.minMargin ?? (highestPriority >= 3 ? 0.045 : 0.075);
+  const strongScore = options.strongScore ?? (highestPriority >= 3 ? 0.74 : 0.84);
+
+  if (!second || top.score >= strongScore || top.score - second.score >= minMargin) {
+    const active = options.activeId ? ranked.find((candidate) => candidate.id === options.activeId) : null;
+    const switchMargin = options.switchMargin ?? 0.10;
+
+    if (
+      active &&
+      active.id !== top.id &&
+      active.eligible &&
+      active.score >= active.threshold * (options.holdFactor ?? 0.86) &&
+      (active.priority ?? 0) >= (top.priority ?? 0) &&
+      top.score < active.score + switchMargin
+    ) {
+      return { ...active, matched: true, heldByHysteresis: true };
+    }
+    return top;
+  }
+
+  return null;
 }
 
 export function chooseStableMatch(history, candidate, options = {}) {
@@ -542,3 +633,26 @@ export function chooseStableMatch(history, candidate, options = {}) {
   const confirmations = next.filter((id) => id === candidate.id).length;
   return { history: next, match: confirmations >= minFrames ? candidate : null };
 }
+
+export function chooseWeightedStableMatch(history = [], candidate, options = {}) {
+  const maxHistory = options.maxHistory ?? 6;
+  const minEvidence = options.minEvidence ?? 2.15;
+  const minHits = options.minHits ?? 3;
+  const entry = candidate?.matched
+    ? { id: candidate.id, confidence: clamp01(candidate.score), priority: candidate.priority ?? 0 }
+    : null;
+  const next = [...history, entry].slice(-maxHistory);
+
+  if (!candidate?.matched) return { history: next, match: null };
+
+  const matching = next.filter((item) => item?.id === candidate.id);
+  const evidence = matching.reduce((sum, item) => sum + (item.confidence ?? 0), 0);
+  const neededHits = (candidate.priority ?? 0) >= 3 ? Math.max(2, minHits - 1) : minHits;
+  const neededEvidence = (candidate.priority ?? 0) >= 3 ? minEvidence * 0.72 : minEvidence;
+
+  return {
+    history: next,
+    match: matching.length >= neededHits && evidence >= neededEvidence ? candidate : null
+  };
+}
+

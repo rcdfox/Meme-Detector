@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseConfidentCandidate, chooseStableMatch, computeFaceBaseline, extractFaceFeatures, extractHandFeatures, normalizeFaceFeatures, rankMemeMatches, smoothFeatureGroup } from '../src/detection.js';
+import { chooseConfidentCandidate, chooseStableMatch, chooseWeightedStableMatch, computeFaceBaseline, extractFaceFeatures, extractHandFeatures, extractPoseFeatures, isCalibrationSampleSuitable, normalizeFaceFeatures, rankMemeMatches, smoothFeatureGroup } from '../src/detection.js';
 
 test('extractFaceFeatures averages symmetric smile blendshapes', () => {
   const face = extractFaceFeatures([
@@ -287,4 +287,105 @@ test('hand geometry detects a shaka/call-me pose', () => {
   const features = extractHandFeatures({ landmarks: [hand], gestures: [[]] });
   assert.equal(features.shaka, 1);
   assert.equal(features.fingerCount, 2);
+});
+
+
+test('calibration rejects obvious expression frames but accepts relaxed faces', () => {
+  assert.equal(isCalibrationSampleSuitable({ present: true, smileMax: 0.18, jawOpen: 0.04, blink: 0.08 }), true);
+  assert.equal(isCalibrationSampleSuitable({ present: true, smileMax: 0.72, jawOpen: 0.04 }), false);
+  assert.equal(isCalibrationSampleSuitable({ present: true, smileMax: 0.10, jawOpen: 0.63 }), false);
+  assert.equal(isCalibrationSampleSuitable({ present: false }), false);
+});
+
+test('peak-hold smoothing preserves transient gesture evidence across skipped frames', () => {
+  const held = smoothFeatureGroup(
+    { thumbUp: 0.9, smile: 0.2 },
+    { thumbUp: 0.0, smile: 0.4 },
+    0.5,
+    { peakHoldKeys: ['thumbUp'], decay: 0.8 }
+  );
+  assert.equal(held.thumbUp, 0.72);
+  assert.equal(held.smile, 0.3);
+});
+
+test('specialized gesture match wins over broad facial matches', () => {
+  const ranked = rankMemeMatches(
+    { present: true, smile: 0.82, smileMax: 0.82, browInnerUp: 0.30, frownMax: 0.20 },
+    { oneHandUp: 1 },
+    { thumbUp: 0.92 }
+  );
+  const chosen = chooseConfidentCandidate(ranked);
+  assert.equal(chosen.id, 'crying-thumbs-up-cat');
+});
+
+test('active eligible match can be held briefly below trigger threshold', () => {
+  const ranked = [
+    { id: 'smug-cat', matched: false, eligible: true, score: 0.38, threshold: 0.42, priority: 1 },
+    { id: 'happy-cat', matched: false, eligible: false, score: 0.32, threshold: 0.58, priority: 1 }
+  ];
+  const chosen = chooseConfidentCandidate(ranked, { activeId: 'smug-cat', holdFactor: 0.86 });
+  assert.equal(chosen.id, 'smug-cat');
+  assert.equal(chosen.heldByHysteresis, true);
+});
+
+test('weighted temporal confirmation accepts repeated strong specialized evidence quickly', () => {
+  const candidate = { id: 'thinking-cat', matched: true, score: 0.82, priority: 4 };
+  let history = [];
+  let match = null;
+  for (let i = 0; i < 2; i += 1) {
+    const state = chooseWeightedStableMatch(history, candidate, { minHits: 3, maxHistory: 6, minEvidence: 1.70 });
+    history = state.history;
+    match = state.match;
+  }
+  assert.equal(match.id, 'thinking-cat');
+});
+
+test('weighted temporal confirmation does not accept one weak facial frame', () => {
+  const candidate = { id: 'concerned-cat', matched: true, score: 0.51, priority: 1 };
+  const state = chooseWeightedStableMatch([], candidate, { minHits: 3, maxHistory: 6, minEvidence: 1.70 });
+  assert.equal(state.match, null);
+});
+
+test('continuous pose scoring increases as wrist rises above shoulder', () => {
+  const landmarks = Array.from({ length: 25 }, () => ({ x: 0.5, y: 0.5, visibility: 1 }));
+  landmarks[0] = { x: 0.5, y: 0.30, visibility: 1 };
+  landmarks[11] = { x: 0.40, y: 0.50, visibility: 1 };
+  landmarks[12] = { x: 0.60, y: 0.50, visibility: 1 };
+  landmarks[13] = { x: 0.36, y: 0.42, visibility: 1 };
+  landmarks[14] = { x: 0.64, y: 0.42, visibility: 1 };
+  landmarks[15] = { x: 0.35, y: 0.30, visibility: 1 };
+  landmarks[16] = { x: 0.65, y: 0.30, visibility: 1 };
+  landmarks[23] = { x: 0.43, y: 0.75, visibility: 1 };
+  landmarks[24] = { x: 0.57, y: 0.75, visibility: 1 };
+
+  const pose = extractPoseFeatures(landmarks);
+  assert.ok(pose.bothHandsUp > 0.9);
+});
+
+test('aspect-correct finger proximity remains strong in widescreen frames', () => {
+  const hand = syntheticHandBase();
+  hand[0] = { x: 0.5, y: 0.82 };
+  hand[5] = { x: 0.5, y: 0.66 };
+  hand[6] = { x: 0.5, y: 0.56 };
+  hand[8] = { x: 0.5, y: 0.40 };
+  hand[9] = { x: 0.54, y: 0.67 };
+  hand[10] = { x: 0.54, y: 0.72 };
+  hand[12] = { x: 0.54, y: 0.77 };
+  hand[13] = { x: 0.58, y: 0.68 };
+  hand[14] = { x: 0.58, y: 0.73 };
+  hand[16] = { x: 0.58, y: 0.78 };
+  hand[17] = { x: 0.62, y: 0.69 };
+  hand[18] = { x: 0.62, y: 0.74 };
+  hand[20] = { x: 0.62, y: 0.79 };
+  hand[1] = { x: 0.44, y: 0.70 };
+  hand[3] = { x: 0.45, y: 0.74 };
+  hand[4] = { x: 0.46, y: 0.78 };
+
+  const features = extractHandFeatures(
+    { landmarks: [hand], gestures: [[]] },
+    syntheticFaceLandmarks(),
+    16 / 9
+  );
+  assert.equal(features.indexOnly, 1);
+  assert.ok(features.indexNearFace > 0.45);
 });
